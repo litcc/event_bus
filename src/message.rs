@@ -3,8 +3,7 @@ use std::sync::Arc;
 use std::ops::Deref;
 use uuid::Uuid;
 use crate::message::Body::{ByteArray, Byte, Short};
-
-//Message used in event bus in standalone instance and cluster
+//借鉴与vertx-rust
 #[derive(Clone, Default, Debug)]
 pub struct Message {
     // 目标地址
