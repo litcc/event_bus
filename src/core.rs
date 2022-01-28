@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
-use std::sync::{Arc, Weak};
+use std::sync::{Arc};
 
 use tokio::sync::{Mutex};
 use crate::message::{Body, Message};
@@ -87,7 +87,7 @@ pub struct EventBusInner<SyncLife: 'static + Send + Sync> {
     receiver: Arc<Mutex<Receiver<Message>>>,
     // 消息处理线程
     receiver_joiner: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
-    runtime: Arc<Runtime>,
+    pub runtime: Arc<Runtime>,
 }
 
 
@@ -151,7 +151,17 @@ impl<SyncLife: 'static + Send + Sync> EventBus<SyncLife> {
 
 
         if is_running {
-            let receiver_joiner_move_value = receiver_joiner.clone();
+            let receiver_joiner_handle1 = receiver_joiner.clone();
+            // _handle1
+            let inner_handle1 = inner.clone();
+            let runtime_handle1 = runtime.clone();
+            // let eb = self.inner.upgrade().unwrap();
+            let eb_sender_handle1 = eb_sender.clone();
+            let consumers_handle1 = consumers.clone();
+            let all_consumers_handle1 = all_consumers.clone();
+            let callback_functions_handle1 = callback_functions.clone();
+
+
             let joiner: tokio::task::JoinHandle<()> = runtime.spawn(async move {
                 'message_loop: loop {
                     info!("loop");
@@ -159,35 +169,38 @@ impl<SyncLife: 'static + Send + Sync> EventBus<SyncLife> {
                     info!("get msg");
                     match msg {
                         Some(mut msg_data) => {
-                            // let msg_data_arc = Arc::new(Mutex::new(msg_data));
-                            debug!("get message from event bus: {:?}", msg_data);
+                            let inner_handle2 = inner_handle1.clone();
+                            let runtime_handle2 = runtime_handle1.clone();
+                            // let eb = self.inner.upgrade().unwrap();
+                            let eb_sender_handle2 = eb_sender_handle1.clone();
+                            let consumers_handle2 = consumers_handle1.clone();
+                            let all_consumers_handle2 = all_consumers_handle1.clone();
+                            let callback_functions_handle2 = callback_functions_handle1.clone();
 
-                            let address = msg_data.address.clone().unwrap();
-                            if msg_data.address.is_some() {
-                                if consumers.lock().await.contains_key(&address) {
-                                    <EventBus::<SyncLife>>::call_func(
-                                        Arc::clone(&inner),
-                                        consumers.clone(),
-                                        all_consumers.clone(),
-                                        callback_functions.clone(),
-                                        eb_sender.clone(),
-                                        &mut msg_data,
-                                        &address,
+
+                            runtime_handle1.spawn(async move  {
+                                debug!("get message from event bus: {:?}", msg_data);
+                                let address = msg_data.address.clone().unwrap();
+                                if msg_data.address.is_some() {
+                                    if consumers_handle2.lock().await.contains_key(&address) {
+                                        <EventBus::<SyncLife>>::call_func(
+                                            inner_handle2,
+                                            consumers_handle2.clone(),
+                                            all_consumers_handle2.clone(),
+                                            callback_functions_handle2.clone(),
+                                            eb_sender_handle2,
+                                            &mut msg_data,
+                                            &address,
+                                        ).await;
+                                    }
+                                } else {
+                                    <EventBus<SyncLife>>::call_replay(
+                                        inner_handle2,
+                                        &msg_data,
+                                        callback_functions_handle2.clone(),
                                     ).await;
                                 }
-                            } else {
-                                <EventBus<SyncLife>>::call_replay(
-                                    Arc::clone(&inner),
-                                    &msg_data,
-                                    callback_functions.clone(),
-                                ).await;
-                                // <EventBus<SyncLife>>
-                                // ::call_replay(
-                                //                                     inner_cf,
-                                //                                     &mut_msg,
-                                //                                     inner_ev.clone().unwrap(),
-                                //                                 )
-                            }
+                            });
                         }
                         None => {
                             error!("error: receive message from event bus failed");
@@ -195,7 +208,7 @@ impl<SyncLife: 'static + Send + Sync> EventBus<SyncLife> {
                         }
                     }
                 };
-                *receiver_joiner_move_value.lock().await = None;
+                *receiver_joiner_handle1.lock().await = None;
             });
             *receiver_joiner.lock().await = Some(joiner);
         }
@@ -345,31 +358,6 @@ mod test_event_bus {
     async fn new_bus() {
         // <SyncLife: 'static + Send + Sync>
         println!("测试启动");
-        // let mut b = EventBus::<()>::new(EventBusOptions::default());
-        //
-        //
-        // let mut bus = &mut b.self_arc.clone().unwrap();
-        //
-        //
-        // println!("启动EventBus成功");
-        // println!("发送消息");
-        //
-        // let kk = Arc::clone(&bus);
-        // let kk2 = Arc::clone(&bus);
-        // thread::spawn(move || {
-        //     loop {
-        //         kk.send("1", Body::String("1".to_string()));
-        //         std::thread::sleep(Duration::from_millis(100));
-        //     }
-        // });
-        // thread::spawn(move || {
-        //     loop {
-        //         kk2.send("2", Body::String("2".to_string()));
-        //         std::thread::sleep(Duration::from_millis(100));
-        //     }
-        // }).join().unwrap();
 
-
-        //std::thread::sleep(Duration::from_millis(60000));
     }
 }
