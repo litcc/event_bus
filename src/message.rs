@@ -1,37 +1,16 @@
+use std::collections::HashMap;
 use std::convert::TryInto;
-use std::sync::Arc;
+use std::error::Error;
+use std::sync::{Arc};
 use std::ops::Deref;
+use tokio::sync::{Mutex};
 use uuid::Uuid;
 use crate::message::Body::{ByteArray, Byte, Short};
 //借鉴与vertx-rust
-#[derive(Clone, Default, Debug)]
-pub struct Message {
-    // 目标地址
-    pub(crate) address: Option<String>,
-    // 回复地址
-    pub(crate) replay: Option<String>,
-    // 二进制正文内容
-    pub(crate) body: Arc<Body>,
-    // 协议版本
-    #[allow(dead_code)]
-    pub(crate) protocol_version: i32,
-    // 系统编解码器 ID
-    #[allow(dead_code)]
-    pub(crate) system_codec_id: i32,
-    // 回复消息端口
-    pub(crate) port: i32,
-    // 回复消息ip
-    pub(crate) host: String,
-    // 头信息
-    #[allow(dead_code)]
-    pub(crate) headers: i32,
-    // 是否发送到所有对应地址的消费者
-    pub(crate) publish: bool,
-}
+
 
 #[derive(Clone, Debug)]
 pub enum Body {
-
     Byte(u8),
     Short(i16),
     Int(i32),
@@ -43,11 +22,11 @@ pub enum Body {
     Boolean(bool),
     Char(char),
     Null,
-    Ping
+    Ping,
 }
 
-impl Body {
 
+impl Body {
     #[inline]
     pub fn is_null(&self) -> bool {
         matches!(self, Body::Null)
@@ -84,7 +63,7 @@ impl Body {
             _ => Err("Body type is not a i64")
         }
     }
-    
+
     #[inline]
     pub fn as_i32(&self) -> Result<i32, &str> {
         match self {
@@ -132,37 +111,255 @@ impl Default for Body {
     }
 }
 
-impl Message {
+
+#[derive(Clone)]
+pub struct IMessage<T: IMessageData + 'static + Send + Sync + Clone>
+{
+    data: Arc<Mutex<T>>,
+}
+
+impl<T: IMessageData + 'static + Send + Sync + Clone> std::fmt::Debug for IMessage<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let kk = tokio::runtime::Runtime::new().unwrap().block_on(async move {
+            self.data.lock().await.to_string()
+        });
+        f.debug_tuple("").field(&kk)
+            .finish()
+    }
+}
+
+impl<T: IMessageData + 'static + Send + Sync + Clone> std::fmt::Display for IMessage<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let kk = tokio::runtime::Runtime::new().unwrap().block_on(async move {
+            self.data.lock().await.to_string()
+        });
+        write!(f, "({})", kk)
+    }
+}
+
+impl<T: IMessageData + 'static + Send + Sync + Clone> IMessage<T> {
+    pub fn new(data: T) -> Self {
+        Self {
+            data: Arc::new(Mutex::new(data))
+        }
+    }
+
     #[inline]
-    pub fn body(&self) -> Arc<Body> {
+    pub(crate) async fn send_address(&self) -> Option<String> {
+        return self.data.lock().await.send_address().clone();
+    }
+
+    #[inline]
+    pub(crate) async fn replay_address(&self) -> Option<String> {
+        return self.data.lock().await.replay_address().clone();
+    }
+
+
+    #[inline]
+    pub async fn body(&self) -> Arc<Body> {
+        self.data.lock().await.body()
+    }
+
+    #[inline]
+    pub async fn reply(&self, data: Body) {
+        if self.can_reply().await {
+            self.data.lock().await.reply(data);
+        }
+    }
+
+    #[inline]
+    pub(crate) async fn headers(&self) -> Arc<HashMap<String, Body>> {
+        self.data.lock().await.headers()
+    }
+
+
+    #[inline]
+    pub(crate) async fn is_publish(&self) -> bool {
+        self.data.lock().await.is_publish()
+    }
+
+    #[inline]
+    pub(crate) async fn is_reply(&self) -> bool {
+        self.data.lock().await.is_reply()
+    }
+
+    #[inline]
+    pub(crate) async fn can_reply(&self) -> bool {
+        self.data.lock().await.can_reply()
+    }
+    #[inline]
+    pub(crate) async fn to_string(&self) -> String {
+        self.data.lock().await.to_string()
+    }
+
+
+    // #[inline]
+    // pub(crate) async fn build_send_data<T>() -> bool {
+    //
+    // }
+    // #[inline]
+    // pub(crate) async fn to_string(&self) -> String {
+    //     self.data.lock().await.to_string()
+    // }
+    //
+}
+
+
+
+pub trait IMessageData  {
+    fn body(&self) -> Arc<Body>;
+    fn reply(&mut self, data: Body);
+    fn send_address(&self) -> Option<String>;
+    fn replay_address(&self) -> Option<String>;
+    fn headers(&self) -> Arc<HashMap<String, Body>>;
+    fn is_publish(&self) -> bool;
+    fn is_reply(&self) -> bool;
+    fn can_reply(&self) -> bool;
+    fn to_string(&self) -> String;
+    fn build_send_data(address: &str, body: Body) -> Self;
+    fn build_request_data(address: &str, replay_address: &str, body: Body) -> Self;
+    fn build_publish_data(address: &str, body: Body) -> Self;
+}
+
+
+
+
+#[derive(Clone, Default, Debug)]
+pub struct VertxMessage {
+    // 目标地址
+    pub(crate) address: Option<String>,
+    // 回复地址
+    pub(crate) replay: Option<String>,
+    // 二进制正文内容
+    pub(crate) body: Arc<Body>,
+    // 协议版本
+    #[allow(dead_code)]
+    pub(crate) protocol_version: i32,
+    // 系统编解码器 ID
+    #[allow(dead_code)]
+    pub(crate) system_codec_id: i32,
+    // 回复消息端口
+    pub(crate) port: i32,
+    // 回复消息ip
+    pub(crate) host: String,
+    // 头信息
+    #[allow(dead_code)]
+    pub(crate) headers: i32,
+    // 是否发送到所有对应地址的消费者
+    pub(crate) publish: bool,
+
+    pub(crate) is_reply: bool,
+}
+
+
+
+
+
+// impl VertxMessage {
+//     pub fn generate() -> VertxMessage {
+//         VertxMessage {
+//             address: Some("test.01".to_string()),
+//             replay: Some(format!(
+//                 "__vertx.reply.{}",
+//                 Uuid::new_v4().to_string()
+//             )),
+//             body: Arc::new(Body::String(Uuid::new_v4().to_string())),
+//             port: 44532_i32,
+//             host: "localhost".to_string(),
+//             ..Default::default()
+//         }
+//     }
+// }
+
+
+impl IMessageData for VertxMessage {
+    fn body(&self) -> Arc<Body> {
         self.body.clone()
     }
 
-    //Reply message to event bus
     #[inline]
-    pub fn reply(&mut self, data: Body) {
+    fn reply(&mut self, data: Body) {
         self.body = Arc::new(data);
         self.address = self.replay.clone();
         self.replay = None;
+        self.is_reply = true;
     }
 
-    pub fn generate() -> Message {
-        Message {
-            address: Some("test.01".to_string()),
-            replay: Some(format!(
-                "__vertx.reply.{}",
-                Uuid::new_v4().to_string()
-            )),
-            body: Arc::new(Body::String(Uuid::new_v4().to_string())),
-            port: 44532_i32,
-            host: "localhost".to_string(),
+    #[inline]
+    fn send_address(&self) -> Option<String> {
+        self.address.clone()
+    }
+
+    #[inline]
+    fn replay_address(&self) -> Option<String> {
+        self.replay.clone()
+    }
+
+    #[inline]
+    fn headers(&self) -> Arc<HashMap<String, Body>> {
+        Arc::new(HashMap::new())
+    }
+
+    #[inline]
+    fn is_publish(&self) -> bool {
+        self.publish
+    }
+
+    #[inline]
+    fn is_reply(&self) -> bool {
+        self.is_reply
+    }
+
+    #[inline]
+    fn can_reply(&self) -> bool {
+        if self.replay.is_some() {
+            true
+        } else {
+            false
+        }
+    }
+
+    #[inline]
+    fn to_string(&self) -> String {
+        // format!("{}", serde_json::to_string(self).unwrap())
+        "".to_string()
+    }
+
+    fn build_send_data(address: &str, body: Body) -> Self {
+        VertxMessage {
+            address: Some(address.to_string()),
+            replay: None,
+            body: Arc::new(body),
+            is_reply:false,
+            ..Default::default()
+        }
+    }
+
+    fn build_request_data(address: &str, replay_address: &str, body: Body) -> Self {
+        VertxMessage {
+            address: Some(address.to_string()),
+            replay: Some(replay_address.to_string()),
+            body: Arc::new(body),
+            is_reply:false,
+            ..Default::default()
+        }
+    }
+
+    fn build_publish_data(address: &str, body: Body) -> Self {
+        VertxMessage {
+            address: Some(address.to_string()),
+            replay: None,
+            body: Arc::new(body),
+            publish: true,
+            is_reply:false,
             ..Default::default()
         }
     }
 }
 
+
 //Implementation of deserialize byte array to message
-impl From<Vec<u8>> for Message {
+impl From<Vec<u8>> for VertxMessage {
     #[inline]
     fn from(msg: Vec<u8>) -> Self {
         let mut idx = 1;
@@ -192,7 +389,7 @@ impl From<Vec<u8>> for Message {
         match system_codec_id {
             0 => {
                 body = Body::Null
-            },
+            }
             1 => {
                 body = Body::Ping
             }
@@ -201,28 +398,28 @@ impl From<Vec<u8>> for Message {
             }
             3 => {
                 body = Body::Boolean(i8::from_be_bytes(msg[idx..idx + 1].try_into().unwrap()) == 1)
-            },
+            }
             4 => {
                 body = Body::Short(i16::from_be_bytes(msg[idx..idx + 2].try_into().unwrap()))
             }
             5 => {
                 body = Body::Int(i32::from_be_bytes(msg[idx..idx + 4].try_into().unwrap()))
-            },
+            }
             6 => {
                 body = Body::Long(i64::from_be_bytes(msg[idx..idx + 8].try_into().unwrap()))
-            },
+            }
             7 => {
                 body = Body::Float(f32::from_be_bytes(msg[idx..idx + 4].try_into().unwrap()))
-            },
+            }
             8 => {
                 body = Body::Double(f64::from_be_bytes(msg[idx..idx + 8].try_into().unwrap()))
-            },
+            }
             9 => {
                 let len_body = i32::from_be_bytes(msg[idx..idx + 4].try_into().unwrap()) as usize;
                 idx += 4;
                 let body_array = msg[idx..idx + len_body].to_vec();
                 body = Body::String(String::from_utf8(body_array).unwrap())
-            },
+            }
             10 => {
                 body = Body::Char(char::from_u32(i16::from_be_bytes(msg[idx..idx + 2].try_into().unwrap()) as u32).unwrap())
             }
@@ -231,11 +428,11 @@ impl From<Vec<u8>> for Message {
                 idx += 4;
                 let body_array = msg[idx..idx + len_body].to_vec();
                 body = Body::ByteArray(body_array)
-            },
+            }
             _ => panic!("system_codec_id: {} not supported", system_codec_id)
         }
 
-        Message {
+        VertxMessage {
             address: Some(address),
             replay,
             port,
@@ -248,7 +445,7 @@ impl From<Vec<u8>> for Message {
     }
 }
 
-impl Message {
+impl VertxMessage {
     //Serialize message to byte array
     #[inline]
     pub fn to_vec(&self) -> Result<Vec<u8>, &str> {

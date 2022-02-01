@@ -1,11 +1,13 @@
-#![feature(get_mut_unchecked)]
+#![feature(async_closure)]
+#![feature(fn_traits)]
+#![feature(type_alias_impl_trait)]
 
-
-
+use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 use log::{info, Level, LevelFilter, Metadata, Record};
 use event_bus::core::{EventBus};
-use event_bus::message::Body;
+use event_bus::message::{Body, VertxMessage};
 // extern crate event_bus;
 
 struct MyLogger;
@@ -25,13 +27,25 @@ impl log::Log for MyLogger {
 
 static MY_LOGGER: MyLogger = MyLogger;
 
+type FutureResult = impl Future<Output=()> + Send + 'static;
+
+type BoxFnMessage = Box<dyn Fn(String) -> FutureResult>;
 
 #[tokio::main]
 async fn main() {
     log::set_logger(&MY_LOGGER).unwrap();
     log::set_max_level(LevelFilter::Trace);
 
-    /*let b = EventBus::<(),>::init(Default::default());
+
+    let df: BoxFnMessage = Box::new(async move |aasdf: String| {
+        info!("你好,{}",aasdf);
+    });
+
+    df.call(("asdfasdf".to_string(), )).await;
+
+
+    let b = Arc::new(EventBus::<(), VertxMessage>::new(Default::default()));
+
 
     //b.start();
     // let mut bus = event_bus::core::get_instance();
@@ -43,28 +57,24 @@ async fn main() {
     let kk3 = b.clone();
 
 
-    b.consumer("1", move |_, _| {
+    b.consumer("1", async move |_| {
         info!("测试1")
     }).await;
 
-    b.consumer("1", |_, _| {
+    b.consumer("1", async move |_| {
         info!("测试1兄弟1")
     }).await;
 
-    b.consumer("1", |_, event_bus| {
-        event_bus.clone().runtime.spawn(async move {
-            info!("测试1兄弟2");
-        });
+    b.consumer("1", async move |_| {
+        info!("订阅1 收到消息");
     }).await;
 
 
-    b.consumer("2", |msg, event_bus| {
-        info!("收到请求：测试1兄弟2");
-        msg.reply(Body::String("测试2".to_string()));
+    b.consumer("2", async move |msg| {
+        info!("订阅2 收到消息");
 
-        // event_bus.clone().runtime.spawn(async move {
-        //
-        // });
+        info!("订阅2 进行回复");
+        msg.msg.reply(Body::String("测试2".to_string())).await;
     }).await;
 
     // tokio::spawn(async move {
@@ -85,13 +95,13 @@ async fn main() {
 
     tokio::spawn(async move {
         // loop {
-            kk3.request("2", Body::String("2".to_string()),|_,_|{
-                info!("kk3收到回复");
-            }).await;
-            tokio::time::sleep(Duration::from_millis(1000)).await;
+        kk3.request("2", Body::String("2".to_string()),  async move |_| {
+            info!("新线程：收到订阅2回复");
+        }).await;
+        tokio::time::sleep(Duration::from_millis(1000)).await;
         // }
     });
 
 
-    tokio::time::sleep(Duration::from_secs(120)).await;*/
+    tokio::time::sleep(Duration::from_secs(120)).await;
 }

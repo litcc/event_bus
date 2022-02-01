@@ -1,26 +1,69 @@
-use std::collections::{HashMap, HashSet};
-use std::hash::Hash;
-
-use std::sync::{Arc};
-
-use tokio::sync::{Mutex};
-use crate::message::{Body, Message};
+use crate::message::{Body, IMessage, IMessageData, VertxMessage};
+use crate::utils::get_uuid_as_string;
+use futures::future::{join_all, BoxFuture};
 use log::{debug, error, info};
-use once_cell::sync::OnceCell;
+use std::collections::{HashMap, HashSet};
+use std::env::Args;
+use std::future::Future;
+use std::hash::Hash;
+use std::pin::Pin;
+use std::sync::Arc;
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use crate::utils::{get_uuid_as_string};
-use futures::future::join_all;
 
-// lazy_static! {
-//     pub static ref RUNTIME: Runtime = Builder::new_multi_thread().enable_all().build().unwrap();
-//     static ref TCPS: Arc<HashMap<String, Arc<TcpStream>>> = Arc::new(HashMap::new());
-//     static ref DO_INVOKE: AtomicBool = AtomicBool::new(true);
+
+// struct FnMessage<T: Box<dyn Fn(Arc<IMessage<T>>, Arc<EventBusInner<SyncLife, T>>, ) -> (impl Future<Output=T> + Send + 'static) + Sync+ std::marker::Send>>{
+//     fn_message: T,
 // }
 
-type BoxFnMessage<CM> = Box<dyn Fn(&mut Message, Arc<EventBusInner<CM>>) + Send + Sync>;
-type BoxFnMessageImmutable<CM> = Box<dyn Fn(&Message, Arc<EventBusInner<CM>>) + Send + Sync>;
+// type BoxFnMessage = Box<dyn Fn(String) -> FutureResult>;
+
+
+pub trait AsyncFn<AT, OT> {
+    fn call(&self, args: AT) -> BoxFuture<'static, OT>;
+}
+
+impl<T, F, IT, OT> AsyncFn<IT, OT> for T
+    where
+        F: Future<Output=OT> + 'static + Send + Sync,
+        T: Fn(IT) -> F,
+
+{
+    fn call(&self, args: IT) -> BoxFuture<'static, OT> {
+        Box::pin(self(args))
+    }
+}
+
+type MsgArg<T> = Arc<IMessage<T>>;
+type BsIn<SyncLife, T> = Arc<EventBusInner<SyncLife, T>>;
+
+pub struct FnMessage<SyncLife, T>
+    where
+        SyncLife: 'static + Send + Sync,
+        T: IMessageData + 'static + Send + Sync + Clone
+{
+    pub eb: BsIn<SyncLife, T>,
+    pub msg: MsgArg<T>,
+}
+
+struct BoxFnMessage<SyncLife, T>
+    where
+        SyncLife: Sync + Send + 'static,
+        T: IMessageData + 'static + Send + Sync + Clone,
+{
+    fnc: Box<dyn AsyncFn<FnMessage<SyncLife, T>, ()> + 'static + Send + Sync>,
+}
+
+
+struct BoxFnMessageImmutable<SyncLife, T>
+    where
+        SyncLife: Sync + Send + 'static,
+        T: IMessageData + 'static + Send + Sync + Clone,
+{
+    fnc: Box<dyn AsyncFn<FnMessage<SyncLife, T>, ()> + 'static + Send + Sync>,
+}
 
 // 事件总线配置
 #[derive(Debug, Clone)]
@@ -45,60 +88,73 @@ impl Default for EventBusOptions {
     }
 }
 
-pub struct Consumers<SyncLife: 'static + Send + Sync> {
+pub struct Consumers<
+    SyncLife: 'static + Send + Sync,
+    T: IMessageData + 'static + Send + Sync + Clone,
+> {
     id: String,
-    consumers: BoxFnMessage<SyncLife>,
-
+    consumers: BoxFnMessage<SyncLife, T>,
 }
 
-impl<SyncLife: 'static + Send + Sync> PartialEq for Consumers<SyncLife> {
+impl<SyncLife: 'static + Send + Sync, T: IMessageData + 'static + Send + Sync + Clone> PartialEq
+for Consumers<SyncLife, T>
+{
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
     }
 }
 
-impl<SyncLife: 'static + Send + Sync> Eq for Consumers<SyncLife> {}
+impl<SyncLife: 'static + Send + Sync, T: IMessageData + 'static + Send + Sync + Clone> Eq
+for Consumers<SyncLife, T>
+{}
 
-
-impl<SyncLife: 'static + Send + Sync> Hash for Consumers<SyncLife> {
+impl<SyncLife: 'static + Send + Sync, T: IMessageData + 'static + Send + Sync + Clone> Hash
+for Consumers<SyncLife, T>
+{
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
     }
 }
 
-
 // 事件总线主要结构体
-pub struct EventBus<SyncLife: 'static + Send + Sync> {
+pub struct EventBus<
+    SyncLife: 'static + Send + Sync,
+    T: IMessageData + 'static + Send + Sync + Clone,
+> {
     options: EventBusOptions,
     // 消费者
-    sender: Sender<Message>,
+    sender: Sender<IMessage<T>>,
     // cluster_manager: Arc<Option<SyncLife>>,
     // event_bus_port: u16,
-    inner: Arc<EventBusInner<SyncLife>>,
+    inner: Arc<EventBusInner<SyncLife, T>>,
     // self_arc: Weak<EventBus<SyncLife>>,
 }
 
-pub struct EventBusInner<SyncLife: 'static + Send + Sync> {
-    consumers: Arc<Mutex<HashMap<String, HashSet<Arc<Consumers<SyncLife>>>>>>,
+pub struct EventBusInner<
+    SyncLife: 'static + Send + Sync,
+    T: IMessageData + 'static + Send + Sync + Clone,
+> {
+    consumers: Arc<Mutex<HashMap<String, HashSet<Arc<Consumers<SyncLife, T>>>>>>,
     // 所有消费者
-    all_consumers: Arc<Mutex<HashMap<String, Arc<Consumers<SyncLife>>>>>,
-    callback_functions: Arc<Mutex<HashMap<String, BoxFnMessageImmutable<SyncLife>>>>,
+    all_consumers: Arc<Mutex<HashMap<String, Arc<Consumers<SyncLife, T>>>>>,
+    callback_functions: Arc<Mutex<HashMap<String, BoxFnMessageImmutable<SyncLife, T>>>>,
     // 消费者
-    receiver: Arc<Mutex<Receiver<Message>>>,
+    receiver: Arc<Mutex<Receiver<IMessage<T>>>>,
     // 消息处理线程
     receiver_joiner: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     pub runtime: Arc<Runtime>,
 }
 
-
-static EVENT_BUS_INSTANCE: OnceCell<EventBus<()>> = OnceCell::new();
+//static EVENT_BUS_INSTANCE: OnceCell<EventBus<()>> = OnceCell::new();
 
 // 初始化事件总线以及启动事件总线
-impl<SyncLife: 'static + Send + Sync> EventBus<SyncLife> {
+impl<SyncLife: 'static + Send + Sync, T: IMessageData + 'static + Send + Sync + Clone>
+EventBus<SyncLife, T>
+{
     // 生成新的事件总线
-    fn new(options: EventBusOptions) -> EventBus<SyncLife> {
+    pub fn new(options: EventBusOptions) -> EventBus<SyncLife, T> {
         // 根据配置创建队列
-        let (sender, receiver): (Sender<Message>, Receiver<Message>) =
+        let (sender, receiver): (Sender<IMessage<T>>, Receiver<IMessage<T>>) =
             channel(options.event_bus_queue_size);
         // 创建事件总线
         let pool_size = options.event_bus_pool_size;
@@ -124,17 +180,16 @@ impl<SyncLife: 'static + Send + Sync> EventBus<SyncLife> {
         }
     }
 
-    // 初始化事件总线
-    pub fn init(options: EventBusOptions) -> &'static EventBus<()> {
-        EVENT_BUS_INSTANCE.get_or_init(|| {
-            EventBus::<()>::new(options)
-        })
-    }
-    // 获取事件总线单例
-    pub fn get_instance() -> &'static EventBus<()> {
-        EVENT_BUS_INSTANCE.get().expect("logger is not initialized")
-    }
-
+    // // 初始化事件总线
+    // pub fn init(options: EventBusOptions) -> &'static EventBus<()> {
+    //     EVENT_BUS_INSTANCE.get_or_init(|| {
+    //         EventBus::<()>::new(options)
+    //     })
+    // }
+    // // 获取事件总线单例
+    // pub fn get_instance() -> &'static EventBus<()> {
+    //     EVENT_BUS_INSTANCE.get().expect("logger is not initialized")
+    // }
 
     // 启动事件总线
     pub async fn start(&self) {
@@ -149,7 +204,6 @@ impl<SyncLife: 'static + Send + Sync> EventBus<SyncLife> {
         let all_consumers = self.inner.all_consumers.clone();
         let callback_functions = self.inner.callback_functions.clone();
 
-
         if is_running {
             let receiver_joiner_handle1 = receiver_joiner.clone();
             // _handle1
@@ -160,7 +214,6 @@ impl<SyncLife: 'static + Send + Sync> EventBus<SyncLife> {
             let consumers_handle1 = consumers.clone();
             let all_consumers_handle1 = all_consumers.clone();
             let callback_functions_handle1 = callback_functions.clone();
-
 
             let joiner: tokio::task::JoinHandle<()> = runtime.spawn(async move {
                 'message_loop: loop {
@@ -176,30 +229,51 @@ impl<SyncLife: 'static + Send + Sync> EventBus<SyncLife> {
                             let consumers_handle2 = consumers_handle1.clone();
                             let all_consumers_handle2 = all_consumers_handle1.clone();
                             let callback_functions_handle2 = callback_functions_handle1.clone();
+                            let msg_arc = Arc::new(msg_data);
+                            let msg_arc_handle = msg_arc.clone();
 
+                            runtime_handle1.spawn(async move {
+                                let msg_data_arc = msg_arc_handle.clone();
 
-                            runtime_handle1.spawn(async move  {
-                                debug!("get message from event bus: {:?}", msg_data);
-                                let address = msg_data.address.clone().unwrap();
-                                if msg_data.address.is_some() {
-                                    if consumers_handle2.lock().await.contains_key(&address) {
-                                        <EventBus::<SyncLife>>::call_func(
-                                            inner_handle2,
-                                            consumers_handle2.clone(),
-                                            all_consumers_handle2.clone(),
-                                            callback_functions_handle2.clone(),
-                                            eb_sender_handle2,
-                                            &mut msg_data,
-                                            &address,
-                                        ).await;
+                                debug!(
+                                    "get message from event bus: {:?}",
+                                    msg_data_arc.body().await.as_ref()
+                                );
+
+                                if !(msg_data_arc.is_reply().await) {
+                                    let address = msg_data_arc.send_address().await;
+                                    if address.is_some() {
+                                        if consumers_handle2
+                                            .lock()
+                                            .await
+                                            .contains_key(address.as_ref().unwrap())
+                                        {
+                                            <EventBus<SyncLife, T>>::call_func(
+                                                inner_handle2,
+                                                consumers_handle2,
+                                                all_consumers_handle2,
+                                                callback_functions_handle2,
+                                                eb_sender_handle2,
+                                                msg_data_arc,
+                                                address.as_ref().unwrap(),
+                                            )
+                                                .await;
+                                        }
                                     }
                                 } else {
-                                    <EventBus<SyncLife>>::call_replay(
+                                    <EventBus<SyncLife, T>>::call_replay(
                                         inner_handle2,
-                                        &msg_data,
+                                        msg_data_arc.clone(),
                                         callback_functions_handle2.clone(),
-                                    ).await;
+                                    )
+                                        .await;
                                 }
+
+                                // if address.is_some() {
+                                //
+                                // } else {
+                                //
+                                // }
                             });
                         }
                         None => {
@@ -207,79 +281,91 @@ impl<SyncLife: 'static + Send + Sync> EventBus<SyncLife> {
                             break 'message_loop;
                         }
                     }
-                };
+                }
                 *receiver_joiner_handle1.lock().await = None;
             });
             *receiver_joiner.lock().await = Some(joiner);
         }
     }
 
-
     #[inline]
     pub async fn send(&self, address: &str, request: Body) {
         let addr = address.to_owned();
-        let message = Message {
-            address: Some(addr),
-            replay: None,
-            body: Arc::new(request),
-            ..Default::default()
-        };
+
+        let msg: IMessage<T> = IMessage::new(T::build_send_data(address, request));
+        // let message = VertxMessage {
+        //     address: Some(addr),
+        //     replay: None,
+        //     body: Arc::new(request),
+        //     ..Default::default()
+        // };
         let local_sender = self.sender.clone();
-        local_sender.send(message).await.unwrap();
+        local_sender.send(msg).await.unwrap();
         info!("发送成功");
     }
 
     #[inline]
-    pub async fn request<OP>(&self, address: &str, request: Body, op: OP)
+    pub async fn request<OP, OT>(&self, address: &str, request: Body, op: OP)
         where
-            OP: Fn(&Message, Arc<EventBusInner<SyncLife>>) + Send + 'static + Sync,
+            OT: Future<Output=()> + 'static + Sync + Send,
+            OP: Fn(FnMessage<SyncLife, T>) -> OT + 'static + Sync + Send,
     {
         let addr = address.to_owned();
-        let message = Message {
-            address: Some(addr),
-            replay: Some(format!(
-                "__EventBus.reply.{}",
-                uuid::Uuid::new_v4().to_string()
-            )),
-            body: Arc::new(request),
-            ..Default::default()
-        };
+        let replay_address = format!("__EventBus.reply.{}", uuid::Uuid::new_v4().to_string());
+        let msg: IMessage<T> = IMessage::new(T::build_request_data(
+            address,
+            replay_address.as_str(),
+            request,
+        ));
+        // let message = VertxMessage {
+        //     address: Some(addr),
+        // replay: Some(format!(
+        //     "__EventBus.reply.{}",
+        //     uuid::Uuid::new_v4().to_string()
+        // )),
+        //     body: Arc::new(request),
+        //     ..Default::default()
+        // };
         let local_cons = self.inner.callback_functions.clone();
-        local_cons.lock().await.insert(message.replay.clone().unwrap(), Box::new(op));
+        local_cons.lock().await.insert(replay_address, BoxFnMessageImmutable { fnc: Box::new(op) });
         let local_sender = self.sender.clone();
-        local_sender.send(message).await.unwrap();
+        local_sender.send(msg).await.unwrap();
     }
 
-    #[inline]
-    pub async fn publish(&self, address: &str, request: Body) {
-        let addr = address.to_owned();
-        let message = Message {
-            address: Some(addr),
-            replay: None,
-            body: Arc::new(request),
-            publish: true,
-            ..Default::default()
-        };
-        let local_sender = self.sender.clone();
-        local_sender.send(message).await.unwrap();
-    }
-
+    // #[inline]
+    // pub async fn publish(&self, address: &str, request: Body) {
+    //     let addr = address.to_owned();
+    //     let message = VertxMessage {
+    //         address: Some(addr),
+    //         replay: None,
+    //         body: Arc::new(request),
+    //         publish: true,
+    //         ..Default::default()
+    //     };
+    //     let local_sender = self.sender.clone();
+    //     local_sender.send(message).await.unwrap();
+    // }
+    //
 
     // 设置消费者
     #[inline]
-    pub async fn consumer<OP>(&self, address: &str, op: OP) -> String
+    pub async fn consumer<OP: 'static, OT>(&self, address: &str, op: OP) -> String
         where
-            OP: Fn(&mut Message, Arc<EventBusInner<SyncLife>>) + Send + 'static + Sync + Copy,
+            OT: Future<Output=()> + 'static + Sync + Send,
+            OP: Fn(FnMessage<SyncLife, T>) -> OT + 'static + Sync + Send,
     {
         let mut uuid = get_uuid_as_string();
         let cons = self.inner.all_consumers.clone();
         'uuid: loop {
             let mut cons_lock = cons.lock().await;
             if !cons_lock.contains_key(&uuid) {
-                cons_lock.insert(uuid.clone(), Arc::new(Consumers {
-                    id: uuid.clone(),
-                    consumers: Box::new(op),
-                }));
+                cons_lock.insert(
+                    uuid.clone(),
+                    Arc::new(Consumers {
+                        id: uuid.clone(),
+                        consumers: BoxFnMessage { fnc: Box::new(op) },
+                    }),
+                );
                 break 'uuid;
             }
             uuid = get_uuid_as_string();
@@ -289,7 +375,10 @@ impl<SyncLife: 'static + Send + Sync> EventBus<SyncLife> {
         if consumers.lock().await.contains_key(address) {
             consumers.lock().await.get_mut(address).unwrap().insert(kk);
         } else {
-            consumers.lock().await.insert(address.to_string(), HashSet::from([kk]));
+            consumers
+                .lock()
+                .await
+                .insert(address.to_string(), HashSet::from([kk]));
         }
         uuid
     }
@@ -301,53 +390,72 @@ impl<SyncLife: 'static + Send + Sync> EventBus<SyncLife> {
         return consumers.lock().await.contains_key(address);
     }
 
-
     #[inline]
     async fn call_replay(
-        eb: Arc<EventBusInner<SyncLife>>,
-        msg_data: &Message,
-        callback_functions: Arc<Mutex<HashMap<String, BoxFnMessageImmutable<SyncLife>>>>,
+        eb: Arc<EventBusInner<SyncLife, T>>,
+        msg_data: Arc<IMessage<T>>,
+        callback_functions: Arc<Mutex<HashMap<String, BoxFnMessageImmutable<SyncLife, T>>>>,
     ) {
         let msg = msg_data.clone();
-        let address = msg.replay.clone();
+        let address = msg.replay_address().await.clone();
         if let Some(address) = address {
             let mut map = callback_functions.lock().await;
             let callback = map.remove(&address);
             if let Some(caller) = callback {
-                caller.call((&msg, eb));
+                // Pin::from().await;
+                caller.fnc.call(FnMessage {
+                    eb,
+                    msg,
+                }).await
             }
         }
     }
 
     #[inline]
     async fn call_func(
-        eb: Arc<EventBusInner<SyncLife>>,
-        consumers: Arc<Mutex<HashMap<String, HashSet<Arc<Consumers<SyncLife>>>>>>,
-        _all_consumers: Arc<Mutex<HashMap<String, Arc<Consumers<SyncLife>>>>>,
-        _callback_functions: Arc<Mutex<HashMap<String, BoxFnMessageImmutable<SyncLife>>>>,
-        _eb_sender: Sender<Message>,
-        msg_data: &mut Message,
+        eb: Arc<EventBusInner<SyncLife, T>>,
+        consumers: Arc<Mutex<HashMap<String, HashSet<Arc<Consumers<SyncLife, T>>>>>>,
+        _all_consumers: Arc<Mutex<HashMap<String, Arc<Consumers<SyncLife, T>>>>>,
+        _callback_functions: Arc<Mutex<HashMap<String, BoxFnMessageImmutable<SyncLife, T>>>>,
+        eb_sender: Sender<IMessage<T>>,
+        msg_data: Arc<IMessage<T>>,
         address: &str,
     ) {
         let consumers_tmp = consumers.clone();
         let hashmap = consumers_tmp.lock().await;
-        // let msg_data_tmp = Arc::clone(&msg_data);
-        if msg_data.publish {
+        let msg_arc2 = msg_data.clone();
+        if msg_data.is_publish().await {
             let consumers_list = hashmap.get(address).unwrap().iter();
             let mut kk_tmp: Vec<JoinHandle<()>> = vec![];
             for fun_item in consumers_list {
-                let fun_item_tmp = fun_item.clone();
-                let mut message_clone = msg_data.clone();
+                let fun_item_tmp = Arc::clone(fun_item);
+                let message_clone = Arc::clone(&msg_data);
                 let eb_tmp = Arc::clone(&eb);
-                let kk2 = eb.runtime.spawn_blocking(move || {
-                    fun_item_tmp.clone().consumers.call((&mut message_clone, eb_tmp.clone()));
+                let kk2 = eb.runtime.spawn(async move {
+                    fun_item_tmp.consumers.fnc.call(FnMessage {
+                        eb: eb_tmp,
+                        msg: message_clone,
+                    }).await;
                 });
                 kk_tmp.push(kk2);
             }
             join_all(kk_tmp).await;
         } else {
-            let fun_call = &hashmap.get(address).unwrap().iter().next().unwrap().consumers;
-            fun_call.call((msg_data, eb.clone()));
+            let fun_call = &hashmap
+                .get(address)
+                .unwrap()
+                .iter()
+                .next()
+                .unwrap()
+                .consumers;
+            fun_call.fnc.call(FnMessage {
+                eb: eb.clone(),
+                msg: msg_data,
+            }).await;
+            if msg_arc2.is_reply().await {
+                let kk: IMessage<T> = (&*msg_arc2).clone();
+                eb_sender.send(kk).await.unwrap();
+            }
         }
     }
 }
@@ -358,6 +466,5 @@ mod test_event_bus {
     async fn new_bus() {
         // <SyncLife: 'static + Send + Sync>
         println!("测试启动");
-
     }
 }
