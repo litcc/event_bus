@@ -1,6 +1,5 @@
 #![feature(async_closure)]
 #![feature(fn_traits)]
-#![feature(type_alias_impl_trait)]
 
 
 pub mod core;

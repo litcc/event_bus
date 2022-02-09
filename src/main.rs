@@ -6,7 +6,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use log::{info, Level, LevelFilter, Metadata, Record};
-use event_bus::core::{EventBus};
+use event_bus::core::{AsyncFn, EventBus, suspend_coroutine};
 use event_bus::message::{Body, VertxMessage};
 // extern crate event_bus;
 
@@ -27,9 +27,9 @@ impl log::Log for MyLogger {
 
 static MY_LOGGER: MyLogger = MyLogger;
 
-type FutureResult = impl Future<Output=()> + Send + 'static;
-
-type BoxFnMessage = Box<dyn Fn(String) -> FutureResult>;
+// type FutureResult = impl Future<Output=()> + Send + 'static;
+//
+// type BoxFnMessage = Box<dyn Fn(String) -> FutureResult>;
 
 #[tokio::main]
 async fn main() {
@@ -37,11 +37,11 @@ async fn main() {
     log::set_max_level(LevelFilter::Trace);
 
 
-    let df: BoxFnMessage = Box::new(async move |aasdf: String| {
-        info!("你好,{}",aasdf);
-    });
-
-    df.call(("asdfasdf".to_string(), )).await;
+    // let df: BoxFnMessage = Box::new(async move |aasdf: String| {
+    //     info!("你好,{}",aasdf);
+    // });
+    //
+    // df.call(("asdfasdf".to_string(), )).await;
 
 
     let b = Arc::new(EventBus::<(), VertxMessage>::new(Default::default()));
@@ -93,11 +93,26 @@ async fn main() {
     //     }
     // });
 
+    let kk234 = kk3.clone();
     tokio::spawn(async move {
+
         // loop {
-        kk3.request("2", Body::String("2".to_string()),  async move |_| {
-            info!("新线程：收到订阅2回复");
+        let kk2343 = kk234.clone();
+        info!("开始执行耗时任务");
+        let kk23423423 = suspend_coroutine(async move |result| {
+            info!("执行耗时任务中");
+            // let oo = result.clone();
+            // kk2343.request("2", Body::String("2".to_string()), as   ync move |eb| {
+            //     info!("新线程：收到订阅2回复");
+            //     // let qwe1 = *eb.msg.body().await.clone();
+            //     // oo.lock().await.resume(Some(qwe1));
+            // }).await;
+            // tokio::time::sleep(Duration::from_millis(2000)).await;
+
+            result.resume(Some("".to_string())).await;
         }).await;
+        info!("执行耗时任务结束: {:?}",kk23423423);
+
         tokio::time::sleep(Duration::from_millis(1000)).await;
         // }
     });

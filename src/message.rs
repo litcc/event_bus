@@ -1,15 +1,15 @@
 use std::collections::HashMap;
 use std::convert::TryInto;
-use std::error::Error;
+
 use std::sync::{Arc};
 use std::ops::Deref;
 use tokio::sync::{Mutex};
-use uuid::Uuid;
+
 use crate::message::Body::{ByteArray, Byte, Short};
 //借鉴与vertx-rust
 
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug)] // , Copy
 pub enum Body {
     Byte(u8),
     Short(i16),
