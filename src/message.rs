@@ -1,15 +1,14 @@
 use std::collections::HashMap;
 use std::convert::TryInto;
 
-use std::sync::{Arc};
 use std::ops::Deref;
-use tokio::sync::{Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
-use crate::message::Body::{ByteArray, Byte, Short};
+use crate::message::Body::{Byte, ByteArray, Short};
 //借鉴与vertx-rust
 
-
-#[derive(Clone, Debug)] // , Copy
+#[derive(Debug, Clone)] // , Copy
 pub enum Body {
     Byte(u8),
     Short(i16),
@@ -25,6 +24,24 @@ pub enum Body {
     Ping,
 }
 
+// impl Clone for Body {
+//     fn clone(&self) -> Self {
+//         match self {
+//             Body::ByteArray(bytes) => Body::ByteArray(Vec::clone(bytes)),
+//             Body::String(str) => Body::String(String::clone(str)),
+//             Body::Byte(byte) => Body::Byte(byte.clone()),
+//             Body::Int(int) => Body::Int(int.clone()),
+//             Body::Long(long) => Body::Long(long.clone()),
+//             Body::Float(float) => Body::Float(float.clone()),
+//             Body::Double(double) => Body::Double(double.clone()),
+//             Body::Short(short) => Body::Short(short.clone()),
+//             Body::Boolean(bool) => Body::Boolean(bool.clone()),
+//             Body::Char(char) => Body::Char(char.clone()),
+//             Body::Null => Body::Null,
+//             Body::Ping => Body::Ping,
+//         }
+//     }
+// }
 
 impl Body {
     #[inline]
@@ -36,7 +53,7 @@ impl Body {
     pub fn as_bool(&self) -> Result<bool, &str> {
         match self {
             Body::Boolean(s) => Ok(*s),
-            _ => Err("Body type is not a bool")
+            _ => Err("Body type is not a bool"),
         }
     }
 
@@ -44,7 +61,7 @@ impl Body {
     pub fn as_f64(&self) -> Result<f64, &str> {
         match self {
             Body::Double(s) => Ok(*s),
-            _ => Err("Body type is not a f64")
+            _ => Err("Body type is not a f64"),
         }
     }
 
@@ -52,7 +69,7 @@ impl Body {
     pub fn as_f32(&self) -> Result<f32, &str> {
         match self {
             Body::Float(s) => Ok(*s),
-            _ => Err("Body type is not a f32")
+            _ => Err("Body type is not a f32"),
         }
     }
 
@@ -60,7 +77,7 @@ impl Body {
     pub fn as_i64(&self) -> Result<i64, &str> {
         match self {
             Body::Long(s) => Ok(*s),
-            _ => Err("Body type is not a i64")
+            _ => Err("Body type is not a i64"),
         }
     }
 
@@ -68,7 +85,7 @@ impl Body {
     pub fn as_i32(&self) -> Result<i32, &str> {
         match self {
             Body::Int(s) => Ok(*s),
-            _ => Err("Body type is not a i32")
+            _ => Err("Body type is not a i32"),
         }
     }
 
@@ -76,7 +93,7 @@ impl Body {
     pub fn as_i16(&self) -> Result<i16, &str> {
         match self {
             Short(s) => Ok(*s),
-            _ => Err("Body type is not a i16")
+            _ => Err("Body type is not a i16"),
         }
     }
 
@@ -84,7 +101,7 @@ impl Body {
     pub fn as_u8(&self) -> Result<u8, &str> {
         match self {
             Byte(s) => Ok(*s),
-            _ => Err("Body type is not a u8")
+            _ => Err("Body type is not a u8"),
         }
     }
 
@@ -92,7 +109,7 @@ impl Body {
     pub fn as_string(&self) -> Result<&String, &str> {
         match self {
             Body::String(s) => Ok(s),
-            _ => Err("Body type is not a String")
+            _ => Err("Body type is not a String"),
         }
     }
 
@@ -100,7 +117,7 @@ impl Body {
     pub fn as_bytes(&self) -> Result<&Vec<u8>, &str> {
         match self {
             ByteArray(s) => Ok(s),
-            _ => Err("Body type is not a Byte Array")
+            _ => Err("Body type is not a Byte Array"),
         }
     }
 }
@@ -111,36 +128,45 @@ impl Default for Body {
     }
 }
 
-
 #[derive(Clone)]
-pub struct IMessage<T: IMessageData + 'static + Send + Sync + Clone>
+pub struct IMessage<T>
+    where
+        T: IMessageData + Send + Sync + Clone
 {
     data: Arc<Mutex<T>>,
 }
 
-impl<T: IMessageData + 'static + Send + Sync + Clone> std::fmt::Debug for IMessage<T> {
+impl<T> std::fmt::Debug for IMessage<T>
+    where
+        T: IMessageData + Send + Sync + Clone
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let kk = tokio::runtime::Runtime::new().unwrap().block_on(async move {
-            self.data.lock().await.to_string()
-        });
-        f.debug_tuple("").field(&kk)
-            .finish()
+        let kk = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move { self.data.lock().await.to_string() });
+        f.debug_tuple("").field(&kk).finish()
     }
 }
 
-impl<T: IMessageData + 'static + Send + Sync + Clone> std::fmt::Display for IMessage<T> {
+impl<T> std::fmt::Display for IMessage<T>
+    where
+        T: IMessageData + Send + Sync + Clone
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let kk = tokio::runtime::Runtime::new().unwrap().block_on(async move {
-            self.data.lock().await.to_string()
-        });
+        let kk = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move { self.data.lock().await.to_string() });
         write!(f, "({})", kk)
     }
 }
 
-impl<T: IMessageData + 'static + Send + Sync + Clone> IMessage<T> {
+impl<T> IMessage<T>
+    where
+        T: IMessageData + Send + Sync + Clone
+{
     pub fn new(data: T) -> Self {
         Self {
-            data: Arc::new(Mutex::new(data))
+            data: Arc::new(Mutex::new(data)),
         }
     }
 
@@ -153,7 +179,6 @@ impl<T: IMessageData + 'static + Send + Sync + Clone> IMessage<T> {
     pub(crate) async fn replay_address(&self) -> Option<String> {
         return self.data.lock().await.replay_address().clone();
     }
-
 
     #[inline]
     pub async fn body(&self) -> Arc<Body> {
@@ -171,7 +196,6 @@ impl<T: IMessageData + 'static + Send + Sync + Clone> IMessage<T> {
     pub(crate) async fn headers(&self) -> Arc<HashMap<String, Body>> {
         self.data.lock().await.headers()
     }
-
 
     #[inline]
     pub(crate) async fn is_publish(&self) -> bool {
@@ -192,7 +216,6 @@ impl<T: IMessageData + 'static + Send + Sync + Clone> IMessage<T> {
         self.data.lock().await.to_string()
     }
 
-
     // #[inline]
     // pub(crate) async fn build_send_data<T>() -> bool {
     //
@@ -204,9 +227,7 @@ impl<T: IMessageData + 'static + Send + Sync + Clone> IMessage<T> {
     //
 }
 
-
-
-pub trait IMessageData  {
+pub trait IMessageData {
     fn body(&self) -> Arc<Body>;
     fn reply(&mut self, data: Body);
     fn send_address(&self) -> Option<String>;
@@ -220,9 +241,6 @@ pub trait IMessageData  {
     fn build_request_data(address: &str, replay_address: &str, body: Body) -> Self;
     fn build_publish_data(address: &str, body: Body) -> Self;
 }
-
-
-
 
 #[derive(Clone, Default, Debug)]
 pub struct VertxMessage {
@@ -251,10 +269,6 @@ pub struct VertxMessage {
     pub(crate) is_reply: bool,
 }
 
-
-
-
-
 // impl VertxMessage {
 //     pub fn generate() -> VertxMessage {
 //         VertxMessage {
@@ -270,7 +284,6 @@ pub struct VertxMessage {
 //         }
 //     }
 // }
-
 
 impl IMessageData for VertxMessage {
     fn body(&self) -> Arc<Body> {
@@ -330,7 +343,7 @@ impl IMessageData for VertxMessage {
             address: Some(address.to_string()),
             replay: None,
             body: Arc::new(body),
-            is_reply:false,
+            is_reply: false,
             ..Default::default()
         }
     }
@@ -340,7 +353,7 @@ impl IMessageData for VertxMessage {
             address: Some(address.to_string()),
             replay: Some(replay_address.to_string()),
             body: Arc::new(body),
-            is_reply:false,
+            is_reply: false,
             ..Default::default()
         }
     }
@@ -351,12 +364,11 @@ impl IMessageData for VertxMessage {
             replay: None,
             body: Arc::new(body),
             publish: true,
-            is_reply:false,
+            is_reply: false,
             ..Default::default()
         }
     }
 }
-
 
 //Implementation of deserialize byte array to message
 impl From<Vec<u8>> for VertxMessage {
@@ -387,33 +399,17 @@ impl From<Vec<u8>> for VertxMessage {
         idx += 4;
         let body;
         match system_codec_id {
-            0 => {
-                body = Body::Null
-            }
-            1 => {
-                body = Body::Ping
-            }
-            2 => {
-                body = Body::Byte(u8::from_be_bytes(msg[idx..idx + 1].try_into().unwrap()))
-            }
+            0 => body = Body::Null,
+            1 => body = Body::Ping,
+            2 => body = Body::Byte(u8::from_be_bytes(msg[idx..idx + 1].try_into().unwrap())),
             3 => {
                 body = Body::Boolean(i8::from_be_bytes(msg[idx..idx + 1].try_into().unwrap()) == 1)
             }
-            4 => {
-                body = Body::Short(i16::from_be_bytes(msg[idx..idx + 2].try_into().unwrap()))
-            }
-            5 => {
-                body = Body::Int(i32::from_be_bytes(msg[idx..idx + 4].try_into().unwrap()))
-            }
-            6 => {
-                body = Body::Long(i64::from_be_bytes(msg[idx..idx + 8].try_into().unwrap()))
-            }
-            7 => {
-                body = Body::Float(f32::from_be_bytes(msg[idx..idx + 4].try_into().unwrap()))
-            }
-            8 => {
-                body = Body::Double(f64::from_be_bytes(msg[idx..idx + 8].try_into().unwrap()))
-            }
+            4 => body = Body::Short(i16::from_be_bytes(msg[idx..idx + 2].try_into().unwrap())),
+            5 => body = Body::Int(i32::from_be_bytes(msg[idx..idx + 4].try_into().unwrap())),
+            6 => body = Body::Long(i64::from_be_bytes(msg[idx..idx + 8].try_into().unwrap())),
+            7 => body = Body::Float(f32::from_be_bytes(msg[idx..idx + 4].try_into().unwrap())),
+            8 => body = Body::Double(f64::from_be_bytes(msg[idx..idx + 8].try_into().unwrap())),
             9 => {
                 let len_body = i32::from_be_bytes(msg[idx..idx + 4].try_into().unwrap()) as usize;
                 idx += 4;
@@ -421,7 +417,13 @@ impl From<Vec<u8>> for VertxMessage {
                 body = Body::String(String::from_utf8(body_array).unwrap())
             }
             10 => {
-                body = Body::Char(char::from_u32(i16::from_be_bytes(msg[idx..idx + 2].try_into().unwrap()) as u32).unwrap())
+                body =
+                    Body::Char(
+                        char::from_u32(
+                            i16::from_be_bytes(msg[idx..idx + 2].try_into().unwrap()) as u32
+                        )
+                            .unwrap(),
+                    )
             }
             12 => {
                 let len_body = i32::from_be_bytes(msg[idx..idx + 4].try_into().unwrap()) as usize;
@@ -429,7 +431,7 @@ impl From<Vec<u8>> for VertxMessage {
                 let body_array = msg[idx..idx + len_body].to_vec();
                 body = Body::ByteArray(body_array)
             }
-            _ => panic!("system_codec_id: {} not supported", system_codec_id)
+            _ => panic!("system_codec_id: {} not supported", system_codec_id),
         }
 
         VertxMessage {
