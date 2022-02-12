@@ -18,22 +18,21 @@ use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
 
 type MsgArg<T> = Arc<IMessage<T>>;
-type BsIn<'a, SyncLife, T> = Arc<EventBusInner<'a, SyncLife, T>>;
+type BsIn<'a, T> = Arc<EventBusInner<'a, T>>;
 
-pub struct FnMessage<'a, SyncLife, T>
+pub struct FnMessage<'a, T>
     where
-        SyncLife: Send + Sync,
         T: IMessageData + Send + Sync + Clone,
 {
-    pub eb: BsIn<'a, SyncLife, T>,
+    pub eb: BsIn<'a, T>,
     pub msg: MsgArg<T>,
 }
 
-type BoxFnMessage<'a, SyncLife, T> =
-Box<dyn AsyncFn<'a, FnMessage<'a, SyncLife, T>, ()> + Send + Sync>;
+type BoxFnMessage<'a, T> =
+Box<dyn AsyncFn<'a, FnMessage<'a,T>, ()> + Send + Sync>;
 
-type BoxFnMessageImmutable<'a, SyncLife, T> =
-Box<dyn AsyncFnOnce<'a, FnMessage<'a, SyncLife, T>, ()> + Send + Sync>;
+type BoxFnMessageImmutable<'a, T> =
+Box<dyn AsyncFnOnce<'a, FnMessage<'a,T>, ()> + Send + Sync>;
 
 // 事件总线配置
 #[derive(Debug, Clone)]
@@ -60,17 +59,15 @@ impl Default for EventBusOptions {
 
 pub struct Consumers<
     'a,
-    SyncLife: Send + Sync,
     T: IMessageData + Send + Sync + Clone,
 > {
     id: String,
-    consumers: BoxFnMessage<'a, SyncLife, T>,
+    consumers: BoxFnMessage<'a, T>,
 }
 
-impl<'a, SyncLife, T> PartialEq
-for Consumers<'a, SyncLife, T>
+impl<'a, T> PartialEq
+for Consumers<'a, T>
     where
-        SyncLife: Send + Sync,
         T: IMessageData + Send + Sync + Clone
 {
     fn eq(&self, other: &Self) -> bool {
@@ -78,17 +75,15 @@ for Consumers<'a, SyncLife, T>
     }
 }
 
-impl<'a, SyncLife, T> Eq
-for Consumers<'a, SyncLife, T>
+impl<'a, T> Eq
+for Consumers<'a, T>
     where
-        SyncLife: Send + Sync,
         T: IMessageData + Send + Sync + Clone
 {}
 
-impl<'a, SyncLife, T> Hash
-for Consumers<'a, SyncLife, T>
+impl<'a, T> Hash
+for Consumers<'a, T>
     where
-        SyncLife: Send + Sync,
         T: IMessageData + Send + Sync + Clone
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
@@ -99,7 +94,6 @@ for Consumers<'a, SyncLife, T>
 // 事件总线主要结构体
 pub struct EventBus<
     'a,
-    SyncLife: Send + Sync,
     T: IMessageData + Send + Sync + Clone,
 > {
     options: EventBusOptions,
@@ -107,20 +101,19 @@ pub struct EventBus<
     sender: Sender<IMessage<T>>,
     // cluster_manager: Arc<Option<SyncLife>>,
     // event_bus_port: u16,
-    inner: Arc<EventBusInner<'a, SyncLife, T>>,
+    inner: Arc<EventBusInner<'a, T>>,
     // self_arc: Weak<EventBus<SyncLife>>,
 }
 
 pub struct EventBusInner<
     'a,
-    SyncLife: Send + Sync,
     T: IMessageData + Send + Sync + Clone,
 > {
     sender: Sender<IMessage<T>>,
-    consumers: Arc<Mutex<HashMap<String, HashSet<Arc<Consumers<'a, SyncLife, T>>>>>>,
+    consumers: Arc<Mutex<HashMap<String, HashSet<Arc<Consumers<'a, T>>>>>>,
     // 所有消费者
-    all_consumers: Arc<Mutex<HashMap<String, Arc<Consumers<'a, SyncLife, T>>>>>,
-    callback_functions: Arc<Mutex<HashMap<String, BoxFnMessageImmutable<'a, SyncLife, T>>>>,
+    all_consumers: Arc<Mutex<HashMap<String, Arc<Consumers<'a, T>>>>>,
+    callback_functions: Arc<Mutex<HashMap<String, BoxFnMessageImmutable<'a, T>>>>,
     // 消费者
     receiver: Arc<Mutex<Receiver<IMessage<T>>>>,
     // 消息处理线程
@@ -131,13 +124,12 @@ pub struct EventBusInner<
 //static EVENT_BUS_INSTANCE: OnceCell<EventBus<()>> = OnceCell::new();
 
 // 初始化事件总线以及启动事件总线
-impl<'a, SyncLife, T> EventBus<'a, SyncLife, T>
+impl<'a, T> EventBus<'a, T>
     where
-        SyncLife: Send + Sync,
         T: IMessageData + Send + Sync + Clone
 {
     // 生成新的事件总线
-    pub fn new<'b>(options: EventBusOptions) -> EventBus<'b, SyncLife, T> {
+    pub fn new<'b>(options: EventBusOptions) -> EventBus<'b, T> {
         // 根据配置创建队列
         let (sender, receiver): (Sender<IMessage<T>>, Receiver<IMessage<T>>) =
             channel(options.event_bus_queue_size);
@@ -225,7 +217,7 @@ impl<'a, SyncLife, T> EventBus<'a, SyncLife, T>
                                             .await
                                             .contains_key(address.as_ref().unwrap())
                                         {
-                                            <EventBus<'h,SyncLife, T>>::call_func(
+                                            <EventBus<'h, T>>::call_func(
                                                 inner_handle2,
                                                 consumers_handle2,
                                                 all_consumers_handle2,
@@ -238,7 +230,7 @@ impl<'a, SyncLife, T> EventBus<'a, SyncLife, T>
                                         }
                                     }
                                 } else {
-                                    <EventBus<SyncLife, T>>::call_replay(
+                                    <EventBus<'h,T>>::call_replay(
                                         inner_handle2,
                                         msg_data_arc.clone(),
                                         callback_functions_handle2.clone(),
@@ -273,7 +265,7 @@ impl<'a, SyncLife, T> EventBus<'a, SyncLife, T>
         where
             Self: 'a,
             OT: Future<Output=()> + 'static + Sync + Send,
-            OP: Fn(FnMessage<'a, SyncLife, T>) -> OT + 'static + Sync + Send,
+            OP: Fn(FnMessage<'a, T>) -> OT + 'static + Sync + Send,
     {
         self.inner.consumer(address, Box::new(op))
     }
@@ -314,10 +306,10 @@ impl<'a, SyncLife, T> EventBus<'a, SyncLife, T>
 
     #[inline]
     async fn call_func<'k>(
-        eb: Arc<EventBusInner<'k, SyncLife, T>>,
-        consumers: Arc<Mutex<HashMap<String, HashSet<Arc<Consumers<'k, SyncLife, T>>>>>>,
-        _all_consumers: Arc<Mutex<HashMap<String, Arc<Consumers<'k, SyncLife, T>>>>>,
-        _callback_functions: Arc<Mutex<HashMap<String, BoxFnMessageImmutable<'k, SyncLife, T>>>>,
+        eb: Arc<EventBusInner<'k, T>>,
+        consumers: Arc<Mutex<HashMap<String, HashSet<Arc<Consumers<'k, T>>>>>>,
+        _all_consumers: Arc<Mutex<HashMap<String, Arc<Consumers<'k, T>>>>>,
+        _callback_functions: Arc<Mutex<HashMap<String, BoxFnMessageImmutable<'k, T>>>>,
         eb_sender: Sender<IMessage<T>>,
         msg_data: Arc<IMessage<T>>,
         address: &str,
@@ -361,10 +353,10 @@ impl<'a, SyncLife, T> EventBus<'a, SyncLife, T>
     }
 
     #[inline]
-    async fn call_replay(
-        eb: Arc<EventBusInner<'a, SyncLife, T>>,
+    async fn call_replay<'k>(
+        eb: Arc<EventBusInner<'k, T>>,
         msg_data: Arc<IMessage<T>>,
-        callback_functions: Arc<Mutex<HashMap<String, BoxFnMessageImmutable<'a, SyncLife, T>>>>,
+        callback_functions: Arc<Mutex<HashMap<String, BoxFnMessageImmutable<'k, T>>>>,
     ) {
         let msg = msg_data.clone();
         let address = msg.replay_address().await.clone();
@@ -379,18 +371,17 @@ impl<'a, SyncLife, T> EventBus<'a, SyncLife, T>
 }
 
 
-impl<'a, SyncLife, T> EventBusInner<'a, SyncLife, T>
+impl<'a, T> EventBusInner<'a, T>
     where
-        SyncLife: Send + Sync,
         T: IMessageData + Send + Sync + Clone
 {
     // 设置消费者
     #[inline]
-    fn consumer<OP, OT>(&self, address: &str, op: BoxFnMessage<'a, SyncLife, T>) -> String
+    fn consumer<OP, OT>(&self, address: &str, op: BoxFnMessage<'a, T>) -> String
         where
             Self: 'a,
             OT: Future<Output=()> + 'static + Sync + Send,
-            OP: Fn(FnMessage<SyncLife, T>) -> OT + 'static + Sync + Send,
+            OP: Fn(FnMessage<'a,T>) -> OT + 'static + Sync + Send,
     {
         self.runtime.block_on(async move {
             let mut uuid = get_uuid_as_string();
@@ -440,7 +431,7 @@ impl<'a, SyncLife, T> EventBusInner<'a, SyncLife, T>
         where
             Self: 'a,
             OT: Future<Output=()> + 'static + Sync + Send,
-            OP: FnOnce(FnMessage<SyncLife, T>) -> OT + 'static + Sync + Send + Copy,
+            OP: FnOnce(FnMessage<'a, T>) -> OT + 'static + Sync + Send + Copy,
     {
         self.runtime.block_on(async move {
             let _addr = address.to_owned();
