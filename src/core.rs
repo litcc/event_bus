@@ -1,21 +1,15 @@
 use crate::async_utils::{AsyncFn, AsyncFnOnce};
 use crate::message::{Body, IMessage, IMessageData};
 use crate::utils::get_uuid_as_string;
-use futures::future::{join_all, BoxFuture};
-use futures::task::ArcWake;
-use futures::TryFutureExt;
+use futures::future::join_all;
 use log::{debug, error, info};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::hash::Hash;
-use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
-use std::task::{Context, Poll, Waker};
+use std::sync::Arc;
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
-use tokio::sync::{oneshot, Mutex};
-use tokio::task::JoinHandle;
+use tokio::sync::Mutex;
 
 type MsgArg<T> = Arc<IMessage<T>>;
 type BsIn<'a, T> = Arc<EventBusInner<'a, T>>;
@@ -28,11 +22,9 @@ pub struct FnMessage<'a, T>
     pub msg: MsgArg<T>,
 }
 
-type BoxFnMessage<'a, T> =
-Box<dyn AsyncFn<'a, FnMessage<'a,T>, ()> + Send + Sync>;
+type BoxFnMessage<'a, T> = Box<dyn AsyncFn<'a, FnMessage<'a, T>, ()> + Send + Sync>;
 
-type BoxFnMessageImmutable<'a, T> =
-Box<dyn AsyncFnOnce<'a, FnMessage<'a,T>, ()> + Send + Sync>;
+type BoxFnMessageImmutable<'a, T> = Box<dyn AsyncFnOnce<'a, FnMessage<'a, T>, ()> + Send + Sync>;
 
 // 事件总线配置
 #[derive(Debug, Clone)]
@@ -57,34 +49,25 @@ impl Default for EventBusOptions {
     }
 }
 
-pub struct Consumers<
-    'a,
-    T: IMessageData + Send + Sync + Clone,
-> {
+pub struct Consumers<'a, T: 'a + IMessageData + Send + Sync + Clone> {
     id: String,
     consumers: BoxFnMessage<'a, T>,
 }
 
-impl<'a, T> PartialEq
-for Consumers<'a, T>
+impl<'a, T> PartialEq for Consumers<'a, T>
     where
-        T: IMessageData + Send + Sync + Clone
+        T: 'a + IMessageData + Send + Sync + Clone,
 {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
     }
 }
 
-impl<'a, T> Eq
-for Consumers<'a, T>
-    where
-        T: IMessageData + Send + Sync + Clone
-{}
+impl<'a, T> Eq for Consumers<'a, T> where T: 'a + IMessageData + Send + Sync + Clone {}
 
-impl<'a, T> Hash
-for Consumers<'a, T>
+impl<'a, T> Hash for Consumers<'a, T>
     where
-        T: IMessageData + Send + Sync + Clone
+        T: 'a + IMessageData + Send + Sync + Clone,
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
@@ -92,10 +75,7 @@ for Consumers<'a, T>
 }
 
 // 事件总线主要结构体
-pub struct EventBus<
-    'a,
-    T: IMessageData + Send + Sync + Clone,
-> {
+pub struct EventBus<'a, T: 'a + IMessageData + Send + Sync + Clone> {
     options: EventBusOptions,
     // 消费者
     sender: Sender<IMessage<T>>,
@@ -105,10 +85,7 @@ pub struct EventBus<
     // self_arc: Weak<EventBus<SyncLife>>,
 }
 
-pub struct EventBusInner<
-    'a,
-    T: IMessageData + Send + Sync + Clone,
-> {
+pub struct EventBusInner<'a, T: IMessageData + Send + Sync + Clone> {
     sender: Sender<IMessage<T>>,
     consumers: Arc<Mutex<HashMap<String, HashSet<Arc<Consumers<'a, T>>>>>>,
     // 所有消费者
@@ -126,7 +103,7 @@ pub struct EventBusInner<
 // 初始化事件总线以及启动事件总线
 impl<'a, T> EventBus<'a, T>
     where
-        T: IMessageData + Send + Sync + Clone
+        T: 'a + IMessageData + Send + Sync + Clone,
 {
     // 生成新的事件总线
     pub fn new<'b>(options: EventBusOptions) -> EventBus<'b, T> {
@@ -160,7 +137,8 @@ impl<'a, T> EventBus<'a, T>
 
     // 启动事件总线
     pub async fn start<'h>(&self)
-        where Self: 'h
+        where
+            Self: 'h,
     {
         let inner = self.inner.clone();
         let receiver = self.inner.receiver.clone();
@@ -230,7 +208,7 @@ impl<'a, T> EventBus<'a, T>
                                         }
                                     }
                                 } else {
-                                    <EventBus<'h,T>>::call_replay(
+                                    <EventBus<'h, T>>::call_replay(
                                         inner_handle2,
                                         msg_data_arc.clone(),
                                         callback_functions_handle2.clone(),
@@ -257,7 +235,6 @@ impl<'a, T> EventBus<'a, T>
         }
     }
 
-
     ///
     /// 设置消费者
     #[inline]
@@ -274,7 +251,7 @@ impl<'a, T> EventBus<'a, T>
     #[inline]
     pub fn send(&self, address: &str, request: Body)
         where
-            Self: 'a
+            Self: 'a,
     {
         self.inner.send(address, request)
     }
@@ -299,7 +276,7 @@ impl<'a, T> EventBus<'a, T>
     #[inline]
     pub fn publish(&self, address: &str, request: Body)
         where
-            Self: 'a
+            Self: 'a,
     {
         self.inner.publish(address, request)
     }
@@ -362,7 +339,7 @@ impl<'a, T> EventBus<'a, T>
         let address = msg.replay_address().await.clone();
         if let Some(address) = address {
             let mut map = callback_functions.lock().await;
-            let callback = map.remove(&address);
+            let callback: Option<BoxFnMessageImmutable<'k, T>> = map.remove(&address);
             if let Some(caller) = callback {
                 caller.async_once_call(FnMessage { eb, msg }).await
             }
@@ -370,10 +347,9 @@ impl<'a, T> EventBus<'a, T>
     }
 }
 
-
 impl<'a, T> EventBusInner<'a, T>
     where
-        T: IMessageData + Send + Sync + Clone
+        T: IMessageData + Send + Sync + Clone,
 {
     // 设置消费者
     #[inline]
@@ -381,7 +357,7 @@ impl<'a, T> EventBusInner<'a, T>
         where
             Self: 'a,
             OT: Future<Output=()> + 'static + Sync + Send,
-            OP: Fn(FnMessage<'a,T>) -> OT + 'static + Sync + Send,
+            OP: Fn(FnMessage<'a, T>) -> OT + 'static + Sync + Send,
     {
         self.runtime.block_on(async move {
             let mut uuid = get_uuid_as_string();
@@ -414,7 +390,6 @@ impl<'a, T> EventBusInner<'a, T>
         })
     }
 
-
     #[inline]
     fn send(&self, address: &str, request: Body) {
         self.runtime.block_on(async move {
@@ -424,7 +399,6 @@ impl<'a, T> EventBusInner<'a, T>
             debug!("发送成功");
         });
     }
-
 
     #[inline]
     fn request<OP, OT>(&self, address: &str, request: Body, op: OP)
@@ -448,7 +422,6 @@ impl<'a, T> EventBusInner<'a, T>
         });
     }
 
-
     ///
     /// 向所有指定消费者发送消息
     #[inline]
@@ -463,7 +436,6 @@ impl<'a, T> EventBusInner<'a, T>
         });
     }
 }
-
 
 #[cfg(test)]
 mod test_event_bus {
