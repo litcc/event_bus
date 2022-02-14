@@ -1,5 +1,3 @@
-#![feature(fn_traits)]
-
 mod async_utils;
 pub mod core;
 pub mod message;

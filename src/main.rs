@@ -1,11 +1,6 @@
-#![feature(fn_traits)]
-#![feature(type_alias_impl_trait)]
-#![feature(async_closure)]
-
-use event_bus::core::{AsyncFn, EventBus};
+use event_bus::core::EventBus;
 use event_bus::message::{Body, VertxMessage};
 use log::{info, Level, LevelFilter, Metadata, Record};
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -41,7 +36,7 @@ async fn main() {
     //
     // df.call(("asdfasdf".to_string(), )).await;
 
-    let b = Arc::new(EventBus::<(), VertxMessage>::new(Default::default()));
+    let b = Arc::new(EventBus::<VertxMessage>::new(Default::default()));
 
     //b.start();
     // let mut bus = event_bus::core::get_instance();
@@ -49,23 +44,28 @@ async fn main() {
     info!("启动EventBus成功");
     info!("发送消息");
     tokio::time::sleep(Duration::from_millis(1000)).await;
-    let kk = b.clone();
     let kk3 = b.clone();
 
-    b.consumer("1", async move |_| info!("测试1"));
+    b.consumer("1", move |_| async {
+        info!("订阅1-1 收到消息");
+    })
+    .await;
 
-    b.consumer("1", async move |_| info!("测试1兄弟1"));
+    b.consumer("1", move |_| async { info!("订阅1-2 收到消息") })
+        .await;
 
-    b.consumer("1", async move |_| {
-        info!("订阅1 收到消息");
-    });
+    b.consumer("1", move |_| async {
+        info!("订阅1-3 收到消息");
+    })
+    .await;
 
-    b.consumer("2", async move |msg| {
+    b.consumer("2", move |msg| async move {
         info!("订阅2 收到消息");
 
         info!("订阅2 进行回复");
         msg.msg.reply(Body::String("测试2".to_string())).await;
-    });
+    })
+    .await;
 
     // tokio::spawn(async move {
     //     // loop {
@@ -85,8 +85,11 @@ async fn main() {
 
     let kk234 = kk3.clone();
     tokio::spawn(async move {
-
-
+        let df = kk234.request("2", Body::String("2".to_string())).await;
+        if df.is_some() {
+            info!("收到响应:{:?}", df.unwrap());
+        }
+        let df2 = kk234.request("2", Body::String("2".to_string())).await;
         tokio::time::sleep(Duration::from_millis(1000)).await;
         // }
     });

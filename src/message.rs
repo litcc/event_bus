@@ -128,18 +128,13 @@ impl Default for Body {
     }
 }
 
+//Sized
 #[derive(Clone)]
-pub struct IMessage<T>
-    where
-        T: IMessageData + Send + Sync + Clone
-{
-    data: Arc<Mutex<T>>,
+pub struct IMessage {
+    data: Arc<Mutex<Box<dyn IMessageData + 'static + Send + Sync>>>,
 }
 
-impl<T> std::fmt::Debug for IMessage<T>
-    where
-        T: IMessageData + Send + Sync + Clone
-{
+impl std::fmt::Debug for IMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let kk = tokio::runtime::Runtime::new()
             .unwrap()
@@ -148,10 +143,7 @@ impl<T> std::fmt::Debug for IMessage<T>
     }
 }
 
-impl<T> std::fmt::Display for IMessage<T>
-    where
-        T: IMessageData + Send + Sync + Clone
-{
+impl std::fmt::Display for IMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let kk = tokio::runtime::Runtime::new()
             .unwrap()
@@ -160,11 +152,8 @@ impl<T> std::fmt::Display for IMessage<T>
     }
 }
 
-impl<T> IMessage<T>
-    where
-        T: IMessageData + Send + Sync + Clone
-{
-    pub fn new(data: T) -> Self {
+impl IMessage {
+    pub fn new(data: Box<dyn IMessageData + 'static + Send + Sync>) -> Self {
         Self {
             data: Arc::new(Mutex::new(data)),
         }
@@ -172,12 +161,33 @@ impl<T> IMessage<T>
 
     #[inline]
     pub(crate) async fn send_address(&self) -> Option<String> {
-        return self.data.lock().await.send_address().clone();
+        let addr = &self.data.lock().await.send_address();
+        return addr.clone();
     }
 
     #[inline]
     pub(crate) async fn replay_address(&self) -> Option<String> {
-        return self.data.lock().await.replay_address().clone();
+        let replay_address = self.data.lock().await.replay_address();
+        let send_address = self.data.lock().await.send_address();
+        match replay_address {
+            Some(ref addr) => {
+                if addr.starts_with("__EventBus.reply.") {
+                    Some(addr.to_string())
+                } else {
+                    None
+                }
+            }
+            None => match send_address {
+                Some(ref addr_s) => {
+                    if addr_s.starts_with("__EventBus.reply.") {
+                        Some(addr_s.to_string())
+                    } else {
+                        None
+                    }
+                }
+                None => None,
+            },
+        }
     }
 
     #[inline]
@@ -204,27 +214,38 @@ impl<T> IMessage<T>
 
     #[inline]
     pub(crate) async fn is_reply(&self) -> bool {
-        self.data.lock().await.is_reply()
+        let address = self.data.lock().await.send_address();
+        match address {
+            Some(ref addr) => {
+                if addr.starts_with("__EventBus.reply.") {
+                    true
+                } else {
+                    false
+                }
+            }
+            None => false,
+        }
     }
 
     #[inline]
     pub(crate) async fn can_reply(&self) -> bool {
-        self.data.lock().await.can_reply()
+        let replay_address = self.data.lock().await.replay_address();
+        match replay_address {
+            Some(ref addr) => {
+                if addr.starts_with("__EventBus.reply.") {
+                    true
+                } else {
+                    false
+                }
+            }
+            None => false,
+        }
     }
+
     #[inline]
     pub(crate) async fn to_string(&self) -> String {
         self.data.lock().await.to_string()
     }
-
-    // #[inline]
-    // pub(crate) async fn build_send_data<T>() -> bool {
-    //
-    // }
-    // #[inline]
-    // pub(crate) async fn to_string(&self) -> String {
-    //     self.data.lock().await.to_string()
-    // }
-    //
 }
 
 pub trait IMessageData {
@@ -234,12 +255,23 @@ pub trait IMessageData {
     fn replay_address(&self) -> Option<String>;
     fn headers(&self) -> Arc<HashMap<String, Body>>;
     fn is_publish(&self) -> bool;
-    fn is_reply(&self) -> bool;
-    fn can_reply(&self) -> bool;
     fn to_string(&self) -> String;
-    fn build_send_data(address: &str, body: Body) -> Self;
-    fn build_request_data(address: &str, replay_address: &str, body: Body) -> Self;
-    fn build_publish_data(address: &str, body: Body) -> Self;
+    fn build_send_data(address: &str, body: Body) -> Box<dyn IMessageData + 'static + Send + Sync>
+    where
+        Self: Sized;
+    fn build_request_data(
+        address: &str,
+        replay_address: &str,
+        body: Body,
+    ) -> Box<dyn IMessageData + 'static + Send + Sync>
+    where
+        Self: Sized;
+    fn build_publish_data(
+        address: &str,
+        body: Body,
+    ) -> Box<dyn IMessageData + 'static + Send + Sync>
+    where
+        Self: Sized;
 }
 
 #[derive(Clone, Default, Debug)]
@@ -268,22 +300,6 @@ pub struct VertxMessage {
 
     pub(crate) is_reply: bool,
 }
-
-// impl VertxMessage {
-//     pub fn generate() -> VertxMessage {
-//         VertxMessage {
-//             address: Some("test.01".to_string()),
-//             replay: Some(format!(
-//                 "__vertx.reply.{}",
-//                 Uuid::new_v4().to_string()
-//             )),
-//             body: Arc::new(Body::String(Uuid::new_v4().to_string())),
-//             port: 44532_i32,
-//             host: "localhost".to_string(),
-//             ..Default::default()
-//         }
-//     }
-// }
 
 impl IMessageData for VertxMessage {
     fn body(&self) -> Arc<Body> {
@@ -319,54 +335,47 @@ impl IMessageData for VertxMessage {
     }
 
     #[inline]
-    fn is_reply(&self) -> bool {
-        self.is_reply
-    }
-
-    #[inline]
-    fn can_reply(&self) -> bool {
-        if self.replay.is_some() {
-            true
-        } else {
-            false
-        }
-    }
-
-    #[inline]
     fn to_string(&self) -> String {
         // format!("{}", serde_json::to_string(self).unwrap())
         "".to_string()
     }
 
-    fn build_send_data(address: &str, body: Body) -> Self {
-        VertxMessage {
+    fn build_send_data(address: &str, body: Body) -> Box<dyn IMessageData + 'static + Send + Sync> {
+        Box::new(VertxMessage {
             address: Some(address.to_string()),
             replay: None,
             body: Arc::new(body),
             is_reply: false,
             ..Default::default()
-        }
+        })
     }
 
-    fn build_request_data(address: &str, replay_address: &str, body: Body) -> Self {
-        VertxMessage {
+    fn build_request_data(
+        address: &str,
+        replay_address: &str,
+        body: Body,
+    ) -> Box<dyn IMessageData + 'static + Send + Sync> {
+        Box::new(VertxMessage {
             address: Some(address.to_string()),
             replay: Some(replay_address.to_string()),
             body: Arc::new(body),
             is_reply: false,
             ..Default::default()
-        }
+        })
     }
 
-    fn build_publish_data(address: &str, body: Body) -> Self {
-        VertxMessage {
+    fn build_publish_data(
+        address: &str,
+        body: Body,
+    ) -> Box<dyn IMessageData + 'static + Send + Sync> {
+        Box::new(VertxMessage {
             address: Some(address.to_string()),
             replay: None,
             body: Arc::new(body),
             publish: true,
             is_reply: false,
             ..Default::default()
-        }
+        })
     }
 }
 
@@ -422,7 +431,7 @@ impl From<Vec<u8>> for VertxMessage {
                         char::from_u32(
                             i16::from_be_bytes(msg[idx..idx + 2].try_into().unwrap()) as u32
                         )
-                            .unwrap(),
+                        .unwrap(),
                     )
             }
             12 => {
