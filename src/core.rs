@@ -171,7 +171,7 @@ where
                                     eb_inner.callback_functions.clone();
                                 let eb_sender_handle2 = eb_inner.sender.clone();
 
-                                debug!(
+                                trace!(
                                     "get message from event bus: {:?}",
                                     msg_data_arc.body().await.as_ref()
                                 );
@@ -314,12 +314,13 @@ where
         let inner = self.inner.clone();
         let kk = crate::async_utils::suspend_coroutine(move |result| async move {
             let aa = result.clone();
+            debug!("向 EventBus request 发送消息");
             inner
                 .request(
                     address_clone.as_str(),
                     request_clone,
                     move |eb| async move {
-                        debug!("request 收到回复");
+                        debug!("EventBus request 收到回复");
                         let body = eb.msg.body().await.clone();
                         let body_clone = (&*body).clone();
                         aa.resume(Some(body_clone));
