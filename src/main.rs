@@ -89,7 +89,7 @@ async fn main() {
         if df.is_some() {
             info!("收到响应:{:?}", df.unwrap());
         }
-        let df2 = kk234.request("2", Body::String("2".to_string())).await;
+
         tokio::time::sleep(Duration::from_millis(1000)).await;
         // }
     });

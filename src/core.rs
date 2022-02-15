@@ -6,14 +6,15 @@ use log::{debug, error, info, trace};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::hash::Hash;
+use std::ops::DerefMut;
 use std::sync::Arc;
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::Mutex;
 
 pub struct FnMessage<T>
-    where
-        T: 'static + IMessageData + Send + Sync + Clone,
+where
+    T: 'static + IMessageData + Send + Sync + Clone,
 {
     pub eb: Arc<EventBusInner<T>>,
     pub msg: IMessage,
@@ -22,7 +23,7 @@ pub struct FnMessage<T>
 type BoxFnMessage<T> = Box<dyn AsyncFn<'static, FnMessage<T>, ()> + 'static + Send + Sync>;
 
 type BoxFnMessageImmutable<T> =
-Box<dyn AsyncFnOnce<'static, FnMessage<T>, ()> + 'static + Send + Sync>;
+    Box<dyn AsyncFnOnce<'static, FnMessage<T>, ()> + 'static + Send + Sync>;
 
 // 事件总线配置
 #[derive(Debug, Clone)]
@@ -48,16 +49,16 @@ impl Default for EventBusOptions {
 }
 
 pub struct Consumers<T>
-    where
-        T: 'static + IMessageData + Send + Sync + Clone,
+where
+    T: 'static + IMessageData + Send + Sync + Clone,
 {
     id: String,
     consumers: BoxFnMessage<T>,
 }
 
 impl<T> PartialEq for Consumers<T>
-    where
-        T: IMessageData + Send + Sync + Clone,
+where
+    T: IMessageData + Send + Sync + Clone,
 {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
@@ -67,8 +68,8 @@ impl<T> PartialEq for Consumers<T>
 impl<T> Eq for Consumers<T> where T: IMessageData + Send + Sync + Clone {}
 
 impl<T> Hash for Consumers<T>
-    where
-        T: IMessageData + Send + Sync + Clone,
+where
+    T: IMessageData + Send + Sync + Clone,
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
@@ -77,8 +78,8 @@ impl<T> Hash for Consumers<T>
 
 // 事件总线主要结构体
 pub struct EventBus<T>
-    where
-        T: 'static + IMessageData + Send + Sync + Clone,
+where
+    T: 'static + IMessageData + Send + Sync + Clone,
 {
     options: EventBusOptions,
     // 消费者
@@ -90,8 +91,8 @@ pub struct EventBus<T>
 }
 
 pub struct EventBusInner<T>
-    where
-        T: 'static + IMessageData + Send + Sync + Clone,
+where
+    T: 'static + IMessageData + Send + Sync + Clone,
 {
     sender: Sender<IMessage>,
     consumers: Arc<Mutex<HashMap<String, HashSet<Arc<Consumers<T>>>>>>,
@@ -106,8 +107,8 @@ pub struct EventBusInner<T>
 }
 
 impl<T> EventBus<T>
-    where
-        T: 'static + IMessageData + Send + Sync + Clone,
+where
+    T: 'static + IMessageData + Send + Sync + Clone,
 {
     // 生成新的事件总线
     pub fn new(options: EventBusOptions) -> EventBus<T> {
@@ -181,7 +182,7 @@ impl<T> EventBus<T>
                                         msg_data_arc.clone(),
                                         callback_functions_handle2.clone(),
                                     )
-                                        .await;
+                                    .await;
                                 } else {
                                     let address = msg_data_arc.send_address().await;
                                     if address.is_some() {
@@ -199,7 +200,7 @@ impl<T> EventBus<T>
                                                 msg_data_arc,
                                                 address.as_ref().unwrap(),
                                             )
-                                                .await;
+                                            .await;
                                         }
                                     }
                                 }
@@ -246,30 +247,37 @@ impl<T> EventBus<T>
             }
             join_all(kk_tmp).await;
         } else {
-            let fun_call = &hashmap.get(address).unwrap().iter().next().unwrap().consumers;
+            let fun_call = &hashmap
+                .get(address)
+                .unwrap()
+                .iter()
+                .next()
+                .unwrap()
+                .consumers;
             debug!("开始执行订阅");
 
-            let mut call_arg = FnMessage {
+            let call_arg = FnMessage {
                 eb: eb.clone(),
-                msg: msg_data,
+                msg: msg_arc2.clone(),
             };
-            if msg_arc2.clone().can_reply().await {
+            if msg_arc2.can_reply().await {
                 debug!("存在需要回复到请求");
-                *call_arg.msg.replay_future.lock().await = Some(IMessageReplayFuture::new());
-            }
-            fun_call.async_call(call_arg).await;
-            let reply_future = msg_arc2.replay_future.lock().await;
-
-            if let Some(ref fut) = *reply_future {
+                let imessage = msg_arc2.clone();
+                // let replay_future = Arc::new(Mutex::new(IMessageReplayFuture::new()));
+                // imessage.replay_future = Some(replay_future.clone());
+                fun_call.async_call(call_arg).await;
                 debug!("等待执行回复");
-                futures::join!(fut.clone());
-            }
-            if msg_arc2.is_reply().await {
-                debug!("存在回复消息");
-                let kk: IMessage = msg_arc2.clone();
-                eb_sender.send(kk).await.unwrap();
+                imessage.clone().replay_future.unwrap().await_future().await;
+                debug!("等待执行回复完成");
+                if imessage.is_reply().await {
+                    debug!("存在回复消息");
+                    let kk: IMessage = imessage.clone();
+                    eb_sender.send(kk).await.unwrap();
+                } else {
+                    debug!("不存在回复消息");
+                }
             } else {
-                debug!("不存在回复消息");
+                fun_call.async_call(call_arg).await;
             }
         }
     }
@@ -294,9 +302,9 @@ impl<T> EventBus<T>
 
     #[inline]
     pub async fn consumer<OP, OT>(&self, address: &str, op: OP) -> String
-        where
-            OT: Future<Output=()> + 'static + Sync + Send,
-            OP: Fn(FnMessage<T>) -> OT + 'static + Sync + Send,
+    where
+        OT: Future<Output = ()> + 'static + Sync + Send,
+        OP: Fn(FnMessage<T>) -> OT + 'static + Sync + Send,
     {
         let kdf = Box::new(op);
         self.inner.consumer(address, kdf).await
@@ -316,18 +324,20 @@ impl<T> EventBus<T>
         let inner = self.inner.clone();
         let kk = crate::async_utils::suspend_coroutine(move |result| async move {
             let aa = result.clone();
-            inner.request(
-                address_clone.as_str(),
-                request_clone,
-                move |eb| async move {
-                    debug!("request 收到回复");
-                    let body = eb.msg.clone().body().await.clone();
-                    let body_clone = (&*body).clone();
-                    aa.resume(Some(body_clone));
-                },
-            ).await;
+            inner
+                .request(
+                    address_clone.as_str(),
+                    request_clone,
+                    move |eb| async move {
+                        debug!("request 收到回复");
+                        let body = eb.msg.body().await.clone();
+                        let body_clone = (&*body).clone();
+                        aa.resume(Some(body_clone));
+                    },
+                )
+                .await;
         })
-            .await;
+        .await;
         kk
     }
     #[inline]
@@ -337,8 +347,8 @@ impl<T> EventBus<T>
 }
 
 impl<T> EventBusInner<T>
-    where
-        T: 'static + IMessageData + Send + Sync + Clone,
+where
+    T: 'static + IMessageData + Send + Sync + Clone,
 {
     // 设置消费者
     #[inline]
@@ -385,17 +395,16 @@ impl<T> EventBusInner<T>
 
     #[inline]
     async fn request<OP, OT>(&self, address: &str, request: Body, op: OP)
-        where
-            OT: Future<Output=()> + 'static + Sync + Send,
-            OP: FnOnce(FnMessage<T>) -> OT + 'static + Sync + Send,
+    where
+        OT: Future<Output = ()> + 'static + Sync + Send,
+        OP: FnOnce(FnMessage<T>) -> OT + 'static + Sync + Send,
     {
         let _addr = address.to_owned();
         let replay_address = format!("__EventBus.reply.{}", uuid::Uuid::new_v4().to_string());
-        let msg: IMessage = IMessage::new(T::build_request_data(
-            address,
-            replay_address.as_str(),
-            request,
-        ));
+        let msg: IMessage = IMessage::new_replay(
+            T::build_request_data(address, replay_address.as_str(), request),
+            IMessageReplayFuture::new(),
+        );
         let local_cons = self.callback_functions.clone();
         // let request = Box::new();
         local_cons.lock().await.insert(replay_address, Box::new(op));

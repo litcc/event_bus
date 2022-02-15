@@ -2,13 +2,14 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::future::Future;
 
+use futures::task::AtomicWaker;
+use log::{debug, info, trace};
 use std::ops::Deref;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
+use std::sync::Arc;
 use std::task::{Context, Poll};
-use log::{info, trace};
 use tokio::sync::Mutex;
 
 use crate::message::Body::{Byte, ByteArray, Short};
@@ -128,7 +129,6 @@ impl Body {
     }
 }
 
-
 impl Into<Vec<u8>> for Body {
     fn into(self) -> Vec<u8> {
         self.as_bytes().unwrap().to_vec()
@@ -141,7 +141,6 @@ impl Into<Body> for Vec<u8> {
     }
 }
 
-
 impl Default for Body {
     fn default() -> Self {
         Self::Null
@@ -152,48 +151,49 @@ impl Default for Body {
 // #[derive(Clone)]
 pub struct IMessage {
     pub(crate) data: Arc<Mutex<Box<dyn IMessageData + 'static + Send + Sync>>>,
-    pub(crate) replay_future: Arc<Mutex<Option<IMessageReplayFuture>>>,
+    pub(crate) replay_future: Option<IMessageReplayFuture>,
 }
 
-pub struct IMessageReplayFuture {
-    pub(crate) is_reply: Arc<AtomicBool>,
-    pub(crate) waker: Arc<futures::task::AtomicWaker>,
-}
-
-impl Clone for IMessageReplayFuture
-{
+impl Clone for IMessage {
     fn clone(&self) -> Self {
-        IMessageReplayFuture {
-            is_reply: Arc::clone(&self.is_reply),
-            waker: Arc::clone(&self.waker),
+        if self.replay_future.is_some() {
+            IMessage {
+                data: self.data.clone(),
+                replay_future: Some(self.replay_future.as_ref().unwrap().clone()),
+            }
+        } else {
+            IMessage {
+                data: self.data.clone(),
+                replay_future: None,
+            }
         }
     }
 }
 
-impl Future for IMessageReplayFuture
-{
+#[derive(Clone)]
+pub struct IMessageReplayFuture {
+    pub(crate) is_reply: Arc<AtomicBool>,
+    pub(crate) waker: Arc<AtomicWaker>,
+}
+
+// impl Clone for IMessageReplayFuture
+// {
+//     fn clone(&self) -> Self {
+//         IMessageReplayFuture {
+//             is_reply: Arc::clone(&self.is_reply),
+//             waker: Arc::clone(&self.waker),
+//         }
+//     }
+// }
+
+impl Future for IMessageReplayFuture {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output>
-        where {
-        trace!("IMessageReplayFuture poll");
-
-        let is_reply = self.is_reply.load(Relaxed);
-
-        // if self.waker.register(cx.waker()) {
-        //     trace!("IMessageReplayFuture poll register");
-        // }
-
-        if is_reply {
-            return Poll::Ready(());
-        }
-
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        debug!("IMessageReplayFuture poll");
         self.waker.register(cx.waker());
 
-        // Need to check condition **after** `register` to avoid a race
-        // condition that would result in lost notifications.
-        let is_reply = self.is_reply.load(Relaxed);
-        if is_reply {
+        if self.is_reply.load(Relaxed) {
             Poll::Ready(())
         } else {
             Poll::Pending
@@ -208,15 +208,9 @@ impl IMessageReplayFuture {
             waker: Arc::new(futures::task::AtomicWaker::new()),
         }
     }
-}
 
-
-impl Clone for IMessage {
-    fn clone(&self) -> Self {
-        IMessage {
-            data: self.data.clone(),
-            replay_future: self.replay_future.clone(),
-        }
+    pub async fn await_future(&mut self) {
+        self.await;
     }
 }
 
@@ -242,7 +236,17 @@ impl IMessage {
     pub fn new(data: Box<dyn IMessageData + 'static + Send + Sync>) -> Self {
         Self {
             data: Arc::new(Mutex::new(data)),
-            replay_future: Arc::new(Mutex::new(None)),
+            replay_future: None,
+        }
+    }
+
+    pub fn new_replay(
+        data: Box<dyn IMessageData + 'static + Send + Sync>,
+        replay_future: IMessageReplayFuture,
+    ) -> Self {
+        Self {
+            data: Arc::new(Mutex::new(data)),
+            replay_future: Some(replay_future),
         }
     }
 
@@ -289,19 +293,16 @@ impl IMessage {
     #[inline]
     pub async fn reply(&self, data: Body) {
         if self.can_reply().await {
-            trace!("replying to message");
-            trace!("send address: {:?}", self.send_address().await);
-            trace!("reply address: {:?}", self.replay_address().await);
             self.data.lock().await.as_mut().reply(data);
-            trace!("replying over");
-            trace!("send address: {:?}", self.send_address().await);
-            trace!("reply address: {:?}", self.replay_address().await);
-            let replay_future = self.replay_future.lock().await;
-            if let Some(ref fut) = *replay_future {
-                trace!("replay future is ready");
+            if let Some(fut) = self.replay_future.clone() {
                 fut.is_reply.store(true, Relaxed);
                 fut.waker.wake();
+                // fut.is_reply.store(true, Relaxed);
+                // fut.waker.wake();
+                debug!("内部执行回复完成");
             }
+        } else {
+            debug!("无法回复");
         }
     }
 
@@ -319,20 +320,20 @@ impl IMessage {
     pub(crate) async fn is_reply(&self) -> bool {
         let address = self.data.lock().await.send_address();
         let replay_address = self.data.lock().await.replay_address();
-        info!("replay_address address: {:?}", replay_address);
-        info!("send_address address: {:?}", address);
+        debug!("replay_address address: {:?}", replay_address);
+        debug!("send_address address: {:?}", address);
         match address {
             Some(ref addr) => {
                 if addr.starts_with("__EventBus.reply.") {
-                    info!("is_reply: true");
+                    debug!("is_reply: true");
                     true
                 } else {
-                    info!("is_reply: false");
+                    debug!("is_reply: false");
                     false
                 }
             }
             None => {
-                info!("is_reply: false");
+                debug!("is_reply: false");
                 false
             }
         }
@@ -342,20 +343,20 @@ impl IMessage {
     pub(crate) async fn can_reply(&self) -> bool {
         let replay_address = self.data.lock().await.replay_address();
         let send_address = self.data.lock().await.send_address();
-        info!("replay_address address: {:?}", replay_address);
-        info!("send_address address: {:?}", send_address);
+        // info!("replay_address address: {:?}", replay_address);
+        // info!("send_address address: {:?}", send_address);
         match replay_address {
             Some(ref addr) => {
                 if addr.starts_with("__EventBus.reply.") {
-                    info!("can_reply: true");
+                    debug!("can_reply: true");
                     true
                 } else {
-                    info!("can_reply: false");
+                    debug!("can_reply: false");
                     false
                 }
             }
             None => {
-                info!("can_reply: false");
+                debug!("can_reply: false");
                 false
             }
         }
@@ -376,21 +377,21 @@ pub trait IMessageData {
     fn is_publish(&self) -> bool;
     fn to_string(&self) -> String;
     fn build_send_data(address: &str, body: Body) -> Box<dyn IMessageData + 'static + Send + Sync>
-        where
-            Self: Sized;
+    where
+        Self: Sized;
     fn build_request_data(
         address: &str,
         replay_address: &str,
         body: Body,
     ) -> Box<dyn IMessageData + 'static + Send + Sync>
-        where
-            Self: Sized;
+    where
+        Self: Sized;
     fn build_publish_data(
         address: &str,
         body: Body,
     ) -> Box<dyn IMessageData + 'static + Send + Sync>
-        where
-            Self: Sized;
+    where
+        Self: Sized;
 }
 
 #[derive(Clone, Default, Debug)]
@@ -544,7 +545,7 @@ impl From<Vec<u8>> for VertxMessage {
                         char::from_u32(
                             i16::from_be_bytes(msg[idx..idx + 2].try_into().unwrap()) as u32
                         )
-                            .unwrap(),
+                        .unwrap(),
                     )
             }
             12 => {

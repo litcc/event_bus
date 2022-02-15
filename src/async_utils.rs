@@ -84,8 +84,7 @@ where
 {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output>
-where {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         trace!("SuspendCoroutineCall poll");
         if self.has_reply.load(Relaxed) {
             return Poll::Ready(());
