@@ -3,7 +3,7 @@ use std::convert::TryInto;
 use std::future::Future;
 
 use futures::task::AtomicWaker;
-use log::{debug, info, trace};
+use log::{debug, warn};
 use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
@@ -176,16 +176,6 @@ pub struct IMessageReplayFuture {
     pub(crate) waker: Arc<AtomicWaker>,
 }
 
-// impl Clone for IMessageReplayFuture
-// {
-//     fn clone(&self) -> Self {
-//         IMessageReplayFuture {
-//             is_reply: Arc::clone(&self.is_reply),
-//             waker: Arc::clone(&self.waker),
-//         }
-//     }
-// }
-
 impl Future for IMessageReplayFuture {
     type Output = ();
 
@@ -297,12 +287,9 @@ impl IMessage {
             if let Some(fut) = self.replay_future.clone() {
                 fut.is_reply.store(true, Relaxed);
                 fut.waker.wake();
-                // fut.is_reply.store(true, Relaxed);
-                // fut.waker.wake();
-                debug!("内部执行回复完成");
             }
         } else {
-            debug!("无法回复");
+            warn!("don't reply");
         }
     }
 
@@ -319,21 +306,16 @@ impl IMessage {
     #[inline]
     pub(crate) async fn is_reply(&self) -> bool {
         let address = self.data.lock().await.send_address();
-        let replay_address = self.data.lock().await.replay_address();
-        debug!("replay_address address: {:?}", replay_address);
-        debug!("send_address address: {:?}", address);
+        let _replay_address = self.data.lock().await.replay_address();
         match address {
             Some(ref addr) => {
                 if addr.starts_with("__EventBus.reply.") {
-                    debug!("is_reply: true");
                     true
                 } else {
-                    debug!("is_reply: false");
                     false
                 }
             }
             None => {
-                debug!("is_reply: false");
                 false
             }
         }
@@ -342,21 +324,15 @@ impl IMessage {
     #[inline]
     pub(crate) async fn can_reply(&self) -> bool {
         let replay_address = self.data.lock().await.replay_address();
-        let send_address = self.data.lock().await.send_address();
-        // info!("replay_address address: {:?}", replay_address);
-        // info!("send_address address: {:?}", send_address);
         match replay_address {
             Some(ref addr) => {
                 if addr.starts_with("__EventBus.reply.") {
-                    debug!("can_reply: true");
                     true
                 } else {
-                    debug!("can_reply: false");
                     false
                 }
             }
             None => {
-                debug!("can_reply: false");
                 false
             }
         }

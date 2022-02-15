@@ -2,11 +2,11 @@ use crate::async_utils::{AsyncFn, AsyncFnOnce};
 use crate::message::{Body, IMessage, IMessageData, IMessageReplayFuture};
 use crate::utils::get_uuid_as_string;
 use futures::future::join_all;
-use log::{debug, error, info, trace};
+use log::{debug, error, trace};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::hash::Hash;
-use std::ops::DerefMut;
+
 use std::sync::Arc;
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -254,27 +254,17 @@ where
                 .next()
                 .unwrap()
                 .consumers;
-            debug!("开始执行订阅");
-
             let call_arg = FnMessage {
                 eb: eb.clone(),
                 msg: msg_arc2.clone(),
             };
             if msg_arc2.can_reply().await {
-                debug!("存在需要回复到请求");
                 let imessage = msg_arc2.clone();
-                // let replay_future = Arc::new(Mutex::new(IMessageReplayFuture::new()));
-                // imessage.replay_future = Some(replay_future.clone());
                 fun_call.async_call(call_arg).await;
-                debug!("等待执行回复");
                 imessage.clone().replay_future.unwrap().await_future().await;
-                debug!("等待执行回复完成");
                 if imessage.is_reply().await {
-                    debug!("存在回复消息");
                     let kk: IMessage = imessage.clone();
                     eb_sender.send(kk).await.unwrap();
-                } else {
-                    debug!("不存在回复消息");
                 }
             } else {
                 fun_call.async_call(call_arg).await;
@@ -389,7 +379,7 @@ where
         self.runtime.spawn(async move {
             let msg: IMessage = IMessage::new(T::build_send_data(&addr, request));
             sender.send(msg).await.unwrap();
-            debug!("发送成功");
+            // debug!("发送成功");
         });
     }
 
