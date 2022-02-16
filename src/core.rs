@@ -230,13 +230,12 @@ where
         address: &str,
     ) {
         let consumers_tmp = consumers.clone();
-        let hashmap = consumers_tmp.lock().await;
         let msg_arc2 = msg_data.clone();
         if msg_data.is_publish().await {
-            let consumers_list = hashmap.get(address).unwrap().iter();
+            let consumers_list:Vec<_> = consumers_tmp.lock().await.get(address).unwrap().iter().map(|x| Arc::clone(&x)).collect();
             let mut kk_tmp = vec![];
             for fun_item in consumers_list {
-                let fun_item_tmp = Arc::clone(fun_item);
+                let fun_item_tmp = Arc::clone(&fun_item);
                 let message_clone = msg_data.clone();
                 let eb_tmp = Arc::clone(&eb);
                 let kk2 = fun_item_tmp.consumers.async_call(FnMessage {
@@ -245,29 +244,31 @@ where
                 });
                 kk_tmp.push(kk2);
             }
-            join_all(kk_tmp).await;
+            eb.runtime.spawn(async move {
+                join_all(kk_tmp).await;
+            });
         } else {
-            let fun_call = &hashmap
+            let fun_call = consumers_tmp.lock().await
                 .get(address)
                 .unwrap()
                 .iter()
                 .next()
-                .unwrap()
-                .consumers;
+                .unwrap().clone();
+
             let call_arg = FnMessage {
                 eb: eb.clone(),
                 msg: msg_arc2.clone(),
             };
             if msg_arc2.can_reply().await {
                 let imessage = msg_arc2.clone();
-                fun_call.async_call(call_arg).await;
+                fun_call.consumers.async_call(call_arg).await;
                 imessage.clone().replay_future.unwrap().await_future().await;
                 if imessage.is_reply().await {
                     let kk: IMessage = imessage.clone();
                     eb_sender.send(kk).await.unwrap();
                 }
             } else {
-                fun_call.async_call(call_arg).await;
+                fun_call.consumers.async_call(call_arg).await;
             }
         }
     }
@@ -282,6 +283,7 @@ where
         if let Some(address) = address {
             let mut map = callback_functions.lock().await;
             let callback = map.remove(&address);
+            drop(map);
 
             if let Some(caller) = callback {
                 let data = FnMessage { eb, msg };
