@@ -1,9 +1,9 @@
 use event_bus::core::EventBus;
 use event_bus::message::{Body, VertxMessage};
 use log::{info, Level, LevelFilter, Metadata, Record};
+use rand::Rng;
 use std::sync::Arc;
 use std::time::Duration;
-use rand::Rng;
 
 struct MyLogger;
 
@@ -14,7 +14,12 @@ impl log::Log for MyLogger {
 
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {
-            println!("{} [{}] - {}", record.level(), chrono::Utc::now().format("%Y-%m-%d %H:%M:%S.%f"), record.args());
+            println!(
+                "{} [{}] - {}",
+                record.level(),
+                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S.%f"),
+                record.args()
+            );
         }
     }
     fn flush(&self) {}
@@ -38,7 +43,6 @@ pub fn random_string(num: u32) -> String {
     }
     return ret_str;
 }
-
 
 #[tokio::main]
 async fn main() {
@@ -64,7 +68,7 @@ async fn main() {
     b.consumer("1", move |_| async {
         info!("订阅1-1 收到消息");
     })
-        .await;
+    .await;
 
     b.consumer("1", move |_| async { info!("订阅1-2 收到消息") })
         .await;
@@ -72,8 +76,7 @@ async fn main() {
     b.consumer("1", move |_| async {
         info!("订阅1-3 收到消息");
     })
-        .await;
-
+    .await;
 
     b.consumer("2", move |msg| async move {
         let fdf = unsafe {
@@ -83,7 +86,7 @@ async fn main() {
         tokio::time::sleep(Duration::from_secs(fdf)).await;
         msg.msg.reply(Body::String(fdf.to_string())).await;
     })
-        .await;
+    .await;
 
     // tokio::spawn(async move {
     //     // loop {
@@ -108,7 +111,7 @@ async fn main() {
             info!("send {}", id);
             let df = kk234.request("2", Body::String("请求".to_string())).await;
             if df.is_some() {
-                info!("get {} {:?}", id,df.unwrap());
+                info!("get {} {:?}", id, df.unwrap());
             }
             // }
         });

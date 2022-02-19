@@ -315,9 +315,7 @@ impl IMessage {
                     false
                 }
             }
-            None => {
-                false
-            }
+            None => false,
         }
     }
 
@@ -332,9 +330,7 @@ impl IMessage {
                     false
                 }
             }
-            None => {
-                false
-            }
+            None => false,
         }
     }
 

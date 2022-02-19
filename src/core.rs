@@ -232,7 +232,14 @@ where
         let consumers_tmp = consumers.clone();
         let msg_arc2 = msg_data.clone();
         if msg_data.is_publish().await {
-            let consumers_list:Vec<_> = consumers_tmp.lock().await.get(address).unwrap().iter().map(|x| Arc::clone(&x)).collect();
+            let consumers_list: Vec<_> = consumers_tmp
+                .lock()
+                .await
+                .get(address)
+                .unwrap()
+                .iter()
+                .map(|x| Arc::clone(&x))
+                .collect();
             let mut kk_tmp = vec![];
             for fun_item in consumers_list {
                 let fun_item_tmp = Arc::clone(&fun_item);
@@ -248,12 +255,15 @@ where
                 join_all(kk_tmp).await;
             });
         } else {
-            let fun_call = consumers_tmp.lock().await
+            let fun_call = consumers_tmp
+                .lock()
+                .await
                 .get(address)
                 .unwrap()
                 .iter()
                 .next()
-                .unwrap().clone();
+                .unwrap()
+                .clone();
 
             let call_arg = FnMessage {
                 eb: eb.clone(),

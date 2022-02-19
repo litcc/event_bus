@@ -1,6 +1,6 @@
 use futures::future::BoxFuture;
 use futures::task::AtomicWaker;
-use log::{trace};
+use log::trace;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
