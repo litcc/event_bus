@@ -36,7 +36,9 @@ pub struct EventBusOptions {
 
 impl Default for EventBusOptions {
     fn default() -> Self {
-        let cpus = num_cpus::get() / 2;
+        let count = std::thread::available_parallelism().unwrap().get();
+
+        let cpus = count / 2;
         let cpus = if cpus < 1 { 1 } else { cpus };
         //let vertx_port: u16 = 0;
         EventBusOptions {
@@ -81,6 +83,7 @@ pub struct EventBus<T>
 where
     T: 'static + IMessageData + Send + Sync + Clone,
 {
+    #[allow(dead_code)]
     options: EventBusOptions,
     // 消费者
     // sender: Sender<IMessage>,

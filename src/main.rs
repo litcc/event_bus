@@ -1,31 +1,10 @@
 use event_bus::core::EventBus;
 use event_bus::message::{Body, VertxMessage};
-use log::{info, Level, LevelFilter, Metadata, Record};
+use log::{info, LevelFilter};
 use rand::Rng;
 use std::sync::Arc;
 use std::time::Duration;
 
-struct MyLogger;
-
-impl log::Log for MyLogger {
-    fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level() <= Level::Trace
-    }
-
-    fn log(&self, record: &Record) {
-        if self.enabled(record.metadata()) {
-            println!(
-                "{} [{}] - {}",
-                record.level(),
-                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S.%f"),
-                record.args()
-            );
-        }
-    }
-    fn flush(&self) {}
-}
-
-static MY_LOGGER: MyLogger = MyLogger;
 
 // type FutureResult = impl Future<Output=()> + Send + 'static;
 //
@@ -46,7 +25,7 @@ pub fn random_string(num: u32) -> String {
 
 #[tokio::main]
 async fn main() {
-    log::set_logger(&MY_LOGGER).unwrap();
+    // log::set_logger(&MY_LOGGER).unwrap();
     log::set_max_level(LevelFilter::Trace);
 
     // let df: BoxFnMessage = Box::new(async move |aasdf: String| {
@@ -79,7 +58,8 @@ async fn main() {
     .await;
 
     b.consumer("2", move |msg| async move {
-        let fdf = unsafe {
+
+        let fdf = {
             let mut rng = rand::thread_rng();
             rng.gen_range(1..20)
         };
@@ -104,7 +84,7 @@ async fn main() {
     //     }
     // });
 
-    for i in 1..1000 {
+    for _i in 1..1000 {
         let kk234 = kk3.clone();
         tokio::spawn(async move {
             let id = random_string(5);

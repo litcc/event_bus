@@ -3,7 +3,7 @@ use std::convert::TryInto;
 use std::future::Future;
 
 use futures::task::AtomicWaker;
-use log::{debug, warn};
+use log::{warn};
 use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
@@ -294,6 +294,7 @@ impl IMessage {
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub(crate) async fn headers(&self) -> Arc<HashMap<String, Body>> {
         self.data.lock().await.headers()
     }
@@ -335,6 +336,7 @@ impl IMessage {
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub(crate) async fn to_string(&self) -> String {
         self.data.lock().await.to_string()
     }
