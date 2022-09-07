@@ -22,8 +22,9 @@ pub fn random_string(num: u32) -> String {
     }
     return ret_str;
 }
+fn main(){}
 
-#[tokio::main]
+/*#[tokio::main]
 async fn main() {
     // log::set_logger(&MY_LOGGER).unwrap();
     log::set_max_level(LevelFilter::Trace);
@@ -101,4 +102,4 @@ async fn main() {
         tokio::time::sleep(Duration::from_secs(120)).await;
     }
     // tokio::time::sleep(Duration::from_secs(120)).await;
-}
+}*/

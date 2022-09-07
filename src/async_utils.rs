@@ -159,7 +159,7 @@ where
     let result = call_fn.return_data.lock().await;
     return result.clone();
 }
-
+/*
 // #[test]
 #[tokio::test]
 async fn test_suspend_coroutine() {
@@ -176,4 +176,4 @@ async fn test_suspend_coroutine() {
     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
     println!("结束");
-}
+}*/
