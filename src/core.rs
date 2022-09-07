@@ -1,5 +1,6 @@
+use std::any::Any;
 use crate::async_utils::{AsyncFn, AsyncFnOnce};
-use crate::message::{Body, IMessage, IMessageData, IMessageReplayFuture};
+use crate::message_old::{Body, IMessage, IMessageData, IMessageReplayFuture};
 use crate::utils::get_uuid_as_string;
 use futures::future::join_all;
 use log::{debug, error, trace};
@@ -12,18 +13,16 @@ use tokio::runtime::{Builder, Runtime};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::Mutex;
 
-pub struct FnMessage<T>
-where
-    T: 'static + IMessageData + Send + Sync + Clone,
+pub struct FnMessage
 {
-    pub eb: Arc<EventBusInner<T>>,
-    pub msg: IMessage,
+    pub eb: Arc<EventBusInner>,
+    pub msg: dyn Any,
 }
-
-type BoxFnMessage<T> = Box<dyn AsyncFn<'static, FnMessage<T>, ()> + 'static + Send + Sync>;
-
-type BoxFnMessageImmutable<T> =
-    Box<dyn AsyncFnOnce<'static, FnMessage<T>, ()> + 'static + Send + Sync>;
+//
+// type BoxFnMessage<T> = Box<dyn AsyncFn<'static, FnMessage, ()> + 'static + Send + Sync>;
+//
+// type BoxFnMessageImmutable<T> =
+// Box<dyn AsyncFnOnce<'static, FnMessage, ()> + 'static + Send + Sync>;
 
 // 事件总线配置
 #[derive(Debug, Clone)]
@@ -32,46 +31,60 @@ pub struct EventBusOptions {
     event_bus_pool_size: usize,
     // 事件总线队列大小
     event_bus_queue_size: usize,
+    runtime: Arc<Runtime>,
 }
 
 impl Default for EventBusOptions {
     fn default() -> Self {
-        let count = std::thread::available_parallelism().unwrap().get();
-
-        let cpus = count / 2;
-        let cpus = if cpus < 1 { 1 } else { cpus };
+        // let count = std::thread::available_parallelism().unwrap().get();
+        let count = num_cpus::get_physical();
+        // let cpus = count / 2;
+        let cpus = if count < 1 { 1 } else { count };
         //let vertx_port: u16 = 0;
         EventBusOptions {
             event_bus_pool_size: cpus,
             event_bus_queue_size: 2000,
+            runtime: Arc::new(
+                Builder::new_multi_thread()
+                    .thread_name("event-bus-thread")
+                    .worker_threads(cpus)
+                    .enable_all()
+                    .build()
+                    .unwrap()
+            ),
             //vertx_host: String::from("127.0.0.1"),
             //vertx_port,
         }
     }
 }
 
-pub struct Consumers<T>
-where
-    T: 'static + IMessageData + Send + Sync + Clone,
-{
-    id: String,
-    consumers: BoxFnMessage<T>,
+type BoxAsyncFnMessage<T = ()> = Box<dyn AsyncFn<'static,FnMessage, T>>;
+type BoxSyncFnMessage<T = ()> = Box<dyn Fn(FnMessage) -> T>;
+
+
+///
+/// Event 事件监听
+pub enum EventListener {
+    AsyncFn(BoxAsyncFnMessage),
+    SyncFn(BoxSyncFnMessage),
 }
 
-impl<T> PartialEq for Consumers<T>
-where
-    T: IMessageData + Send + Sync + Clone,
+pub struct Consumers
+{
+    id: String,
+    consumers: EventListener,
+}
+
+impl PartialEq for Consumers
 {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
     }
 }
 
-impl<T> Eq for Consumers<T> where T: IMessageData + Send + Sync + Clone {}
+impl Eq for Consumers {}
 
-impl<T> Hash for Consumers<T>
-where
-    T: IMessageData + Send + Sync + Clone,
+impl Hash for Consumers
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
@@ -79,47 +92,36 @@ where
 }
 
 // 事件总线主要结构体
-pub struct EventBus<T>
-where
-    T: 'static + IMessageData + Send + Sync + Clone,
+pub struct EventBus
 {
     #[allow(dead_code)]
     options: EventBusOptions,
-    // 消费者
-    // sender: Sender<IMessage>,
-    // cluster_manager: Arc<Option<SyncLife>>,
-    // event_bus_port: u16,
-    inner: Arc<EventBusInner<T>>,
-    // self_arc: Weak<EventBus<SyncLife>>,
+    inner: Arc<EventBusInner>,
 }
 
-pub struct EventBusInner<T>
-where
-    T: 'static + IMessageData + Send + Sync + Clone,
+pub struct EventBusInner
 {
     sender: Sender<IMessage>,
-    consumers: Arc<Mutex<HashMap<String, HashSet<Arc<Consumers<T>>>>>>,
+    consumers: Arc<Mutex<HashMap<String, HashSet<Arc<Consumers>>>>>,
     // 所有消费者
-    all_consumers: Arc<Mutex<HashMap<String, Arc<Consumers<T>>>>>,
-    callback_functions: Arc<Mutex<HashMap<String, BoxFnMessageImmutable<T>>>>,
+    all_consumers: Arc<Mutex<HashMap<String, Arc<Consumers>>>>,
     // 消费者
     receiver: Arc<Mutex<Receiver<IMessage>>>,
     // 消息处理线程
     receiver_joiner: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
-    pub runtime: Arc<Runtime>,
+    runtime: Arc<Runtime>,
 }
 
-impl<T> EventBus<T>
-where
-    T: 'static + IMessageData + Send + Sync + Clone,
+impl EventBus
+
 {
     // 生成新的事件总线
-    pub fn new(options: EventBusOptions) -> EventBus<T> {
+    pub fn new(options: EventBusOptions) -> EventBus {
         // 根据配置创建队列
         let (sender, receiver): (Sender<IMessage>, Receiver<IMessage>) =
             channel(options.event_bus_queue_size);
         // 创建事件总线
-        let pool_size = options.event_bus_pool_size;
+        let rt = options.runtime.clone();
         EventBus {
             options,
             // sender: sender.clone(),
@@ -128,22 +130,14 @@ where
                 sender,
                 consumers: Arc::new(Mutex::new(HashMap::new())),
                 all_consumers: Arc::new(Mutex::new(Default::default())),
-                callback_functions: Arc::new(Mutex::new(HashMap::new())),
                 receiver: Arc::new(Mutex::new(receiver)),
                 receiver_joiner: Arc::new(Mutex::new(None)),
-                runtime: Arc::new(
-                    Builder::new_multi_thread()
-                        .thread_name("event-bus-thread")
-                        .worker_threads(pool_size)
-                        .enable_all()
-                        .build()
-                        .unwrap(),
-                ),
+                runtime: rt,
             }),
         }
     }
 
-    pub async fn start(&self) {
+    /*pub async fn start(&self) {
         let inner = self.inner.clone();
         let receiver = self.inner.receiver.clone();
         let runtime = self.inner.runtime.clone();
@@ -185,7 +179,7 @@ where
                                         msg_data_arc.clone(),
                                         callback_functions_handle2.clone(),
                                     )
-                                    .await;
+                                        .await;
                                 } else {
                                     let address = msg_data_arc.send_address().await;
                                     if address.is_some() {
@@ -203,7 +197,7 @@ where
                                                 msg_data_arc,
                                                 address.as_ref().unwrap(),
                                             )
-                                            .await;
+                                                .await;
                                         }
                                     }
                                 }
@@ -222,12 +216,11 @@ where
             *receiver_joiner.lock().await = Some(joiner);
         }
     }
-
-    async fn call_func(
-        eb: Arc<EventBusInner<T>>,
-        consumers: Arc<Mutex<HashMap<String, HashSet<Arc<Consumers<T>>>>>>,
-        _all_consumers: Arc<Mutex<HashMap<String, Arc<Consumers<T>>>>>,
-        _callback_functions: Arc<Mutex<HashMap<String, BoxFnMessageImmutable<T>>>>,
+*/
+    /*async fn call_func(
+        eb: Arc<EventBusInner>,
+        consumers: Arc<Mutex<HashMap<String, HashSet<Arc<Consumers>>>>>,
+        _all_consumers: Arc<Mutex<HashMap<String, Arc<Consumers>>>>,
         eb_sender: Sender<IMessage>,
         msg_data: IMessage,
         address: &str,
@@ -284,153 +277,152 @@ where
                 fun_call.consumers.async_call(call_arg).await;
             }
         }
-    }
+    }*/
 
-    async fn call_replay(
-        eb: Arc<EventBusInner<T>>,
-        msg_data: IMessage,
-        callback_functions: Arc<Mutex<HashMap<String, BoxFnMessageImmutable<T>>>>,
-    ) {
-        let msg = msg_data.clone();
-        let address = msg.replay_address().await.clone();
-        if let Some(address) = address {
-            let mut map = callback_functions.lock().await;
-            let callback = map.remove(&address);
-            drop(map);
+    // async fn call_replay(
+    //     eb: Arc<EventBusInner>,
+    //     msg_data: IMessage,
+    //     callback_functions: Arc<Mutex<HashMap<String, BoxFnMessageImmutable>>>,
+    // ) {
+    //     let msg = msg_data.clone();
+    //     let address = msg.replay_address().await.clone();
+    //     if let Some(address) = address {
+    //         let mut map = callback_functions.lock().await;
+    //         let callback = map.remove(&address);
+    //         drop(map);
+    //
+    //         if let Some(caller) = callback {
+    //             let data = FnMessage { eb, msg };
+    //             caller.async_call_once(data).await
+    //         }
+    //     }
+    // }
 
-            if let Some(caller) = callback {
-                let data = FnMessage { eb, msg };
-                caller.async_call_once(data).await
-            }
-        }
-    }
-
-    #[inline]
-    pub async fn consumer<OP, OT>(&self, address: &str, op: OP) -> String
-    where
-        OT: Future<Output = ()> + 'static + Sync + Send,
-        OP: Fn(FnMessage<T>) -> OT + 'static + Sync + Send,
-    {
-        let kdf = Box::new(op);
-        self.inner.consumer(address, kdf).await
-    }
-
-    /// 向消费者发送消息
-    #[inline]
-    pub fn send(&self, address: &str, request: Body) {
-        self.inner.send(address, request)
-    }
-
-    /// 向消费者发送数据并且等待相应数据
-    #[inline]
-    pub async fn request(&self, address: &str, ref request: Body) -> Option<Body> {
-        let request_clone = request.clone();
-        let address_clone = address.to_owned();
-        let inner = self.inner.clone();
-        let kk = crate::async_utils::suspend_coroutine(move |result| async move {
-            let aa = result.clone();
-            debug!("向 EventBus request 发送消息");
-            inner
-                .request(
-                    address_clone.as_str(),
-                    request_clone,
-                    move |eb| async move {
-                        debug!("EventBus request 收到回复");
-                        let body = eb.msg.body().await.clone();
-                        let body_clone = (&*body).clone();
-                        aa.resume(Some(body_clone));
-                    },
-                )
-                .await;
-        })
-        .await;
-        kk
-    }
-    #[inline]
-    pub fn publish(&self, address: &str, request: Body) {
-        self.inner.publish(address, request)
-    }
+    // #[inline]
+    // pub async fn consumer<OP, OT>(&self, address: &str, op: EventBusInner) -> String
+    //     where
+    //         OT: Future<Output=()> + 'static + Sync + Send,
+    //         OP: Fn(FnMessage) -> OT + 'static + Sync + Send,
+    // {
+    //     let kdf = Box::new(op);
+    //     self.inner.consumer(address, kdf).await
+    // }
+    //
+    // /// 向消费者发送消息
+    // #[inline]
+    // pub fn send(&self, address: &str, request: Body) {
+    //     self.inner.send(address, request)
+    // }
+    //
+    // /// 向消费者发送数据并且等待相应数据
+    // #[inline]
+    // pub async fn request(&self, address: &str, ref request: Body) -> Option<Body> {
+    //     let request_clone = request.clone();
+    //     let address_clone = address.to_owned();
+    //     let inner = self.inner.clone();
+    //     let kk = crate::async_utils::suspend_coroutine(move |result| async move {
+    //         let aa = result.clone();
+    //         debug!("向 EventBus request 发送消息");
+    //         inner
+    //             .request(
+    //                 address_clone.as_str(),
+    //                 request_clone,
+    //                 move |eb| async move {
+    //                     debug!("EventBus request 收到回复");
+    //                     let body = eb.msg.body().await.clone();
+    //                     let body_clone = (&*body).clone();
+    //                     aa.resume(Some(body_clone));
+    //                 },
+    //             )
+    //             .await;
+    //     })
+    //         .await;
+    //     kk
+    // }
+    // #[inline]
+    // pub fn publish(&self, address: &str, request: Body) {
+    //     self.inner.publish(address, request)
+    // }
 }
 
-impl<T> EventBusInner<T>
-where
-    T: 'static + IMessageData + Send + Sync + Clone,
+impl EventBusInner
 {
-    // 设置消费者
-    #[inline]
-    async fn consumer(&self, address: &str, op: BoxFnMessage<T>) -> String {
-        let mut uuid = get_uuid_as_string();
-        let cons = self.all_consumers.clone();
-        'uuid: loop {
-            let mut cons_lock = cons.lock().await;
-            if !cons_lock.contains_key(&uuid) {
-                cons_lock.insert(
-                    uuid.clone(),
-                    Arc::new(Consumers {
-                        id: uuid.clone(),
-                        consumers: op,
-                    }),
-                );
-                break 'uuid;
-            }
-            uuid = get_uuid_as_string();
-        }
-        let consumers = self.consumers.clone();
-        let kk = cons.clone().lock_owned().await.get(&uuid).unwrap().clone();
-        if consumers.lock().await.contains_key(address) {
-            consumers.lock().await.get_mut(address).unwrap().insert(kk);
-        } else {
-            consumers
-                .lock()
-                .await
-                .insert(address.to_string(), HashSet::from([kk]));
-        }
-        uuid
-    }
+    // // 设置消费者
+    // #[inline]
+    // async fn consumer(&self, address: &str, op: EventListener) -> String {
+    //
+    //     let mut all_consumers = self.all_consumers.lock().await;
+    //     let mut consumers = self.consumers.lock().await;
+    //     let uuid = 'uuid: loop {
+    //         let uuid = get_uuid_as_string();
+    //         if !all_consumers.contains_key(&uuid) {
+    //             all_consumers.insert(
+    //                 uuid.clone(),
+    //                 Arc::new(Consumers {
+    //                     id: uuid.clone(),
+    //                     consumers: op,
+    //                 }),
+    //             );
+    //             break 'uuid uuid;
+    //         }
+    //     };
+    //     drop(all_consumers);
+    //     let kk = all_consumers.get(&uuid).unwrap().clone();
+    //     if consumers.contains_key(address) {
+    //         consumers.get_mut(address).unwrap().insert(kk);
+    //     } else {
+    //         consumers.insert(address.to_string(), HashSet::from([kk]));
+    //     }
+    //     drop(consumers);
+    //     uuid
+    // }
 
-    #[inline]
-    fn send(&self, address: &str, request: Body) {
-        let addr = address.to_string();
-        let sender = self.sender.clone();
-        self.runtime.spawn(async move {
-            let msg: IMessage = IMessage::new(T::build_send_data(&addr, request));
-            sender.send(msg).await.unwrap();
-            // debug!("发送成功");
-        });
-    }
-
-    #[inline]
-    async fn request<OP, OT>(&self, address: &str, request: Body, op: OP)
-    where
-        OT: Future<Output = ()> + 'static + Sync + Send,
-        OP: FnOnce(FnMessage<T>) -> OT + 'static + Sync + Send,
-    {
-        let _addr = address.to_owned();
-        let replay_address = format!("__EventBus.reply.{}", uuid::Uuid::new_v4().to_string());
-        let msg: IMessage = IMessage::new_replay(
-            T::build_request_data(address, replay_address.as_str(), request),
-            IMessageReplayFuture::new(),
-        );
-        let local_cons = self.callback_functions.clone();
-        // let request = Box::new();
-        local_cons.lock().await.insert(replay_address, Box::new(op));
-        let local_sender = self.sender.clone();
-        // local_sender.send(msg).await.unwrap();
-        local_sender.send(msg).await.unwrap();
-    }
-
-    ///
-    /// 向所有指定消费者发送消息
-    #[inline]
-    fn publish(&self, address: &str, request: Body) {
-        let addr = address.to_string();
-        let sender = self.sender.clone();
-
-        self.runtime.spawn(async move {
-            let msg: IMessage = IMessage::new(T::build_publish_data(&addr, request));
-            sender.send(msg).await.unwrap();
-        });
-    }
+    // #[inline]
+    // fn send<T>(&self, address: &str, request: Body)
+    //     where
+    //         T: IMessageData
+    // {
+    //     let addr = address.to_string();
+    //     let sender = self.sender.clone();
+    //     self.runtime.spawn(async move {
+    //         let msg: IMessage = IMessage::new(T::build_send_data(&addr, request));
+    //         sender.send(msg).await.unwrap();
+    //         // debug!("发送成功");
+    //     });
+    // }
+    //
+    // #[inline]
+    // async fn request<OP, OT>(&self, address: &str, request: Body, op: OP)
+    //     where
+    //         OT: Future<Output=()> + 'static + Sync + Send,
+    //         OP: FnOnce(FnMessage) -> OT + 'static + Sync + Send,
+    // {
+    //     let _addr = address.to_owned();
+    //     let replay_address = format!("__EventBus.reply.{}", uuid::Uuid::new_v4().to_string());
+    //     let msg: IMessage = IMessage::new_replay(
+    //         T::build_request_data(address, replay_address.as_str(), request),
+    //         IMessageReplayFuture::new(),
+    //     );
+    //     let local_cons = self.callback_functions.clone();
+    //     // let request = Box::new();
+    //     local_cons.lock().await.insert(replay_address, Box::new(op));
+    //     let local_sender = self.sender.clone();
+    //     // local_sender.send(msg).await.unwrap();
+    //     local_sender.send(msg).await.unwrap();
+    // }
+    //
+    // ///
+    // /// 向所有指定消费者发送消息
+    // #[inline]
+    // fn publish(&self, address: &str, request: Body) {
+    //     let addr = address.to_string();
+    //     let sender = self.sender.clone();
+    //
+    //     self.runtime.spawn(async move {
+    //         let msg: IMessage = IMessage::new(T::build_publish_data(&addr, request));
+    //         sender.send(msg).await.unwrap();
+    //     });
+    // }
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 name = "event_bus"
 version = "0.1.0"
 edition = "2021"
-
+build="src/build.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
@@ -11,10 +11,21 @@ once_cell = "1.13.1"
 rand = "0.8.5"  # 随机数库
 uuid = { version = "1.1.2", features = ["v4"] } # uuid库
 log = "0.4.17" # 日志库
-#num_cpus = "1.13.1" # 获取cpu信息
+num_cpus = "1.13.1" # 获取cpu信息
 #tokio = {version ="1.20.1", features = ["full"] } # 协程库
 tokio = { version = "1", features = ["rt", "net", "sync", "rt-multi-thread"] } # 协程库
+
+bytes = "1.2"
+
+prost = { version = "0.11", default-features = false, features = ["prost-derive"] }
+# Only necessary if using Protobuf well-known types:
+prost-types = { version = "0.11", default-features = false }
 
 [dev-dependencies]
 chrono = "0.4.22" # 时间库 临时使用
 tokio = { version = "1", features = ["rt", "net", "sync", "rt-multi-thread", "macros","time"] } # 协程库
+
+[build-dependencies]
+prost-build = { version ="0.11" }
+#tonic-build = "0.8.0"
+protobuf-src = "1.1"

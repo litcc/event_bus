@@ -1,5 +1,4 @@
-
-
+mod message;
 
 #[test]
 fn it_works() {

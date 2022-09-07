@@ -1,5 +1,5 @@
 use event_bus::core::EventBus;
-use event_bus::message::{Body, VertxMessage};
+use event_bus::message_old::{Body, VertxMessage};
 use log::{info, LevelFilter};
 use rand::Rng;
 use std::sync::Arc;
@@ -23,6 +23,10 @@ pub fn random_string(num: u32) -> String {
     return ret_str;
 }
 
+fn main(){
+    
+}
+/*
 #[tokio::main]
 async fn main() {
     // log::set_logger(&MY_LOGGER).unwrap();
@@ -102,3 +106,4 @@ async fn main() {
     }
     // tokio::time::sleep(Duration::from_secs(120)).await;
 }
+*/

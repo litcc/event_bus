@@ -160,20 +160,20 @@ where
     return result.clone();
 }
 
-// #[test]
-#[tokio::test]
-async fn test_suspend_coroutine() {
-    println!("开始执行耗时任务");
-    let test_1 = suspend_coroutine(move |result| async move {
-        println!("执行耗时任务中");
-        tokio::time::sleep(tokio::time::Duration::from_millis(5000)).await;
-        println!("执行耗时任务中 - 准备返回结果");
-        result.resume(Some("".to_string()));
-    })
-    .await;
-    println!("执行耗时任务结束: {:?}", test_1);
-
-    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-
-    println!("结束");
-}
+// // #[test]
+// #[tokio::test]
+// async fn test_suspend_coroutine() {
+//     println!("开始执行耗时任务");
+//     let test_1 = suspend_coroutine(move |result| async move {
+//         println!("执行耗时任务中");
+//         tokio::time::sleep(tokio::time::Duration::from_millis(5000)).await;
+//         println!("执行耗时任务中 - 准备返回结果");
+//         result.resume(Some("".to_string()));
+//     })
+//     .await;
+//     println!("执行耗时任务结束: {:?}", test_1);
+//
+//     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+//
+//     println!("结束");
+// }
