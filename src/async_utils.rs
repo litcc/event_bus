@@ -1,4 +1,3 @@
-use futures::future::BoxFuture;
 use futures::task::AtomicWaker;
 use log::trace;
 use std::future::Future;
@@ -8,61 +7,65 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+
+pub type BoxFutureSync<'a, T> = Pin<Box<dyn Future<Output=T> + Send + Sync + 'a>>;
+
+
 pub trait AsyncFn<'a, IT, OT> {
-    fn async_call(&self, args: IT) -> BoxFuture<'a, OT>
-    where
-        Self: 'a;
+    fn async_call(&self, args: IT) -> BoxFutureSync<'a, OT>
+        where
+            Self: 'a;
 }
 
 impl<'a, T, F, IT, OT> AsyncFn<'a, IT, OT> for T
-where
-    F: Future<Output = OT> + 'a + Send + Sync,
-    T: Fn(IT) -> F + 'a,
+    where
+        F: Future<Output=OT> + 'a + Send + Sync,
+        T: Fn(IT) -> F + 'a,
 {
     #[inline]
-    fn async_call(&self, args: IT) -> BoxFuture<'a, OT>
-    where
-        Self: 'a,
+    fn async_call(&self, args: IT) -> BoxFutureSync<'a, OT>
+        where
+            Self: 'a,
     {
         Box::pin(self(args))
     }
 }
 
 pub trait AsyncFnOnce<'a, IT, OT> {
-    fn async_call_once(self: Box<Self>, args: IT) -> BoxFuture<'a, OT>
-    where
-        Self: 'a;
+    fn async_call_once(self: Box<Self>, args: IT) -> BoxFutureSync<'a, OT>
+        where
+            Self: 'a;
 }
 
 impl<'a, T, F, IT, OT> AsyncFnOnce<'a, IT, OT> for T
-where
-    F: Future<Output = OT> + 'a + Send + Sync,
-    T: FnOnce(IT) -> F + 'a + ?Sized,
+    where
+        F: Future<Output=OT> + 'a + Send + Sync,
+        T: FnOnce(IT) -> F + 'a + ?Sized,
 {
     #[inline]
-    fn async_call_once(self: Box<Self>, args: IT) -> BoxFuture<'a, OT>
-    where
-        Self: 'a,
+    fn async_call_once(self: Box<Self>, args: IT) -> BoxFutureSync<'a, OT>
+        where
+            Self: 'a,
     {
         Box::pin(self(args))
     }
 }
 
 pub trait AsyncFnMut<'a, IT, OT> {
-    fn async_call_mut(&mut self, args: IT) -> BoxFuture<'a, OT>
-    where
-        Self: 'a;
+    fn async_call_mut(&mut self, args: IT) -> BoxFutureSync<'a, OT>
+        where
+            Self: 'a;
 }
 
 impl<'a, T, F, IT, OT> AsyncFnMut<'a, IT, OT> for T
-where
-    F: Future<Output = OT> + 'a + Send + Sync,
-    T: FnMut(IT) -> F + 'a,
+    where
+        F: Future<Output=OT> + 'a + Send + Sync,
+        T: FnMut(IT) -> F + 'a,
 {
     #[inline]
-    fn async_call_mut(&mut self, args: IT) -> BoxFuture<'a, OT>
-    where
-        Self: 'a,
+    fn async_call_mut(&mut self, args: IT) -> BoxFutureSync<'a, OT>
+        where
+            Self: 'a,
     {
         // Box::pin(self.call_once((args, )))
         Box::pin(self(args))
@@ -70,8 +73,8 @@ where
 }
 
 pub struct SuspendCoroutineCall<T>
-where
-    T: Clone + Send,
+    where
+        T: Clone + Send,
 {
     return_data: Arc<futures::lock::Mutex<Option<T>>>,
     has_reply: Arc<AtomicBool>,
@@ -79,8 +82,8 @@ where
 }
 
 impl<T> Future for SuspendCoroutineCall<T>
-where
-    T: Clone + Send,
+    where
+        T: Clone + Send,
 {
     type Output = ();
 
@@ -103,8 +106,8 @@ where
 }
 
 impl<T> Default for SuspendCoroutineCall<T>
-where
-    T: Clone + Send,
+    where
+        T: Clone + Send,
 {
     fn default() -> Self {
         SuspendCoroutineCall {
@@ -116,8 +119,8 @@ where
 }
 
 impl<T> Clone for SuspendCoroutineCall<T>
-where
-    T: Clone + Send,
+    where
+        T: Clone + Send,
 {
     fn clone(&self) -> Self {
         SuspendCoroutineCall {
@@ -129,8 +132,8 @@ where
 }
 
 impl<T> SuspendCoroutineCall<T>
-where
-    T: Clone + Send,
+    where
+        T: Clone + Send,
 {
     pub fn resume(&self, res: Option<T>) {
         if !self.has_reply.load(Relaxed) {
@@ -146,15 +149,15 @@ where
 }
 
 pub async fn suspend_coroutine<T, OP, OT>(fnc: OP) -> Option<T>
-where
-    OT: Future<Output = ()> + 'static + Sync + Send,
-    OP: FnOnce(SuspendCoroutineCall<T>) -> OT + 'static + Sync + Send,
-    T: Clone + Send,
+    where
+        OT: Future<Output=()> + 'static + Sync + Send,
+        OP: FnOnce(SuspendCoroutineCall<T>) -> OT + 'static + Sync + Send,
+        T: Clone + Send,
 {
     let call_fn = SuspendCoroutineCall::default();
     let fnc_box = Box::new(fnc);
 
-    let adf2: BoxFuture<()> = fnc_box.async_call_once(call_fn.clone());
+    let adf2: BoxFutureSync<()> = fnc_box.async_call_once(call_fn.clone());
     futures::join!(call_fn.clone(), adf2);
     let result = call_fn.return_data.lock().await;
     return result.clone();
